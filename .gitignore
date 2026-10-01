@@ -1,0 +1,63 @@
+# Build directories
+build/
+build-*/
+bin/
+out/
+target/
+
+# CMake artifacts
+CMakeCache.txt
+CMakeFiles/
+CMakeScripts/
+Testing/
+Makefile
+cmake_install.cmake
+install_manifest.txt
+compile_commands.json
+CTestTestfile.cmake
+_deps/
+
+# Compiled Binaries and Libraries
+*.exe
+*.dll
+*.so
+*.dylib
+*.a
+*.lib
+capt-service
+test_capt
+test_ipp
+test_pwg_dither
+test_scoa
+
+# Object files and compiler output
+*.o
+*.obj
+*.d
+*.i
+*.s
+
+# Logs and runtime data
+*.log
+*.out
+*.trace
+
+# Visual Studio / IDEs / Editors
+.vs/
+*.sln
+*.vcxproj*
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.bak
+
+# Windows / OS artifacts
+Thumbs.db
+[Dd]esktop.ini
+.DS_Store
+
+# Temporary files and crash dumps
+*.tmp
+*.dmp
