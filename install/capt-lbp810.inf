@@ -1,0 +1,69 @@
+; Canon LBP-810 WinUSB Driver INF
+; Replaces usbprint.sys with winusb.sys for direct USB access
+;
+; Installation:
+;   1. Connect the Canon LBP-810 via USB
+;   2. Open Device Manager
+;   3. Right-click the printer device -> Update Driver
+;   4. Browse my computer -> Let me pick -> Have Disk -> Select this INF
+;   OR use: pnputil /add-driver capt-lbp810.inf /install
+
+[Version]
+Signature   = "$Windows NT$"
+Class       = USBDevice
+ClassGuid   = {88BAE032-5A81-49f0-BC3D-A4FF138216D6}
+Provider    = %ProviderName%
+DriverVer   = 09/30/2026,1.0.0.0
+; CatalogFile = capt-lbp810.cat  ; Uncomment if signing for distribution
+
+[Manufacturer]
+%MfgName% = DeviceList,NTamd64
+
+[DeviceList.NTamd64]
+%DeviceName% = USB_Install, USB\VID_04A9&PID_260A
+
+[USB_Install]
+Include = winusb.inf
+Needs   = WINUSB.NT
+
+[USB_Install.Services]
+Include = winusb.inf
+Needs   = WINUSB.NT.Services
+
+[USB_Install.Wdf]
+KmdfService = WINUSB, WinUsb_Install
+
+[WinUsb_Install]
+KmdfLibraryVersion = 1.11
+
+[USB_Install.HW]
+AddReg = Dev_AddReg
+
+[USB_Install.CoInstallers]
+AddReg    = CoInstallers_AddReg
+CopyFiles = CoInstallers_CopyFiles
+
+[Dev_AddReg]
+; Device interface GUID that our service uses to find the printer
+HKR,,DeviceInterfaceGUIDs,0x00010000,"{A5DCBF10-6530-11D2-901F-00C04FB951ED}"
+
+[CoInstallers_AddReg]
+HKR,,CoInstallers32,0x00010000,"WdfCoInstaller01011.dll,WdfCoInstaller"
+
+[CoInstallers_CopyFiles]
+WdfCoInstaller01011.dll
+
+[DestinationDirs]
+CoInstallers_CopyFiles = 11
+
+[SourceDisksNames]
+1 = %DiskName%
+
+[SourceDisksFiles]
+WdfCoInstaller01011.dll = 1
+
+[Strings]
+ProviderName = "Canon LBP-810 CAPT Driver"
+MfgName      = "Canon"
+DeviceName   = "Canon LBP-810 (CAPT via WinUSB)"
+DiskName     = "Canon LBP-810 WinUSB Driver"
