@@ -206,27 +206,85 @@ Create `.github/workflows/build.yml` with multi-platform verification:
 
 ```mermaid
 flowchart TD
-    subgraph Milestone 1: Zero-Touch Deployment
-        M1A[Automated PnPUtil Driver Installer] --> M1B[All-in-One MSI / WiX Installer]
-        M1B --> M1C[One-Click diagnose.ps1 Tool]
+    subgraph M1["Milestone 1: Zero-Touch Deployment"]
+        M1A["Automated PnPUtil Driver Installer"] --> M1B["All-in-One MSI / WiX Installer"]
+        M1B --> M1C["One-Click diagnose.ps1 Tool"]
     end
 
-    subgraph Milestone 2: Capability Parity
-        M2A[Legal / Exec / Env Paper Formats] --> M2B[Manual Slot vs Auto Tray Routing]
-        M2B --> M2C[Resolution 300/600 & Toner Save Toggles]
+    subgraph M2["Milestone 2: Capability Parity"]
+        M2A["Legal / Exec / Env Paper Formats"] --> M2B["Manual Slot vs Auto Tray Routing"]
+        M2B --> M2C["Resolution 300/600 & Toner Save Toggles"]
     end
 
-    subgraph Milestone 3: Spooler Polish & Reliability
-        M3A[IPP printer-state-reasons Toast Alerts] --> M3B[Active Cancel-Job 0xE0A4 Purge]
-        M3B --> M3C[Dynamic USB Hotplug / Auto-Reconnect]
+    subgraph M3["Milestone 3: Spooler Polish & Reliability"]
+        M3A["IPP printer-state-reasons Toast Alerts"] --> M3B["Active Cancel-Job 0xE0A4 Purge"]
+        M3B --> M3C["Dynamic USB Hotplug / Auto-Reconnect"]
     end
 
-    subgraph Milestone 4: Advanced Polish
-        M4A[Adaptive Text-Preserving Halftoning] --> M4B[System Tray Monitor capt-tray.exe]
-        M4B --> M4C[CI/CD Release Automation & Whitepaper]
+    subgraph M4["Milestone 4: Advanced Polish"]
+        M4A["Adaptive Text-Preserving Halftoning"] --> M4B["System Tray Monitor capt-tray.exe"]
+        M4B --> M4C["CI/CD Release Automation & Whitepaper"]
     end
 
-    Milestone 1 --> Milestone 2
-    Milestone 2 --> Milestone 3
-    Milestone 3 --> Milestone 4
+    M1C --> M2A
+    M2C --> M3A
+    M3C --> M4A
 ```
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│               Milestone 1: Zero-Touch Deployment (P0)                  │
+│                                                                        │
+│  ┌───────────────────────┐    ┌─────────────────────────────────────┐  │
+│  │ Automated PnPUtil     │───▶│ All-in-One MSI / WiX Installer      │  │
+│  │ Driver Provisioning   │    │ (silent install + clean rollback)   │  │
+│  └───────────────────────┘    └──────────────────┬──────────────────┘  │
+│                                                  │                     │
+│                               ┌──────────────────▼──────────────────┐  │
+│                               │ One-Click diagnose.ps1 Utility      │  │
+│                               └─────────────────────────────────────┘  │
+└──────────────────────────────────────────────────┬─────────────────────┘
+                                                   │
+                                                   ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│               Milestone 2: Capability Parity (P1)                      │
+│                                                                        │
+│  ┌───────────────────────┐    ┌─────────────────────────────────────┐  │
+│  │ Extended Paper Sizes  │───▶│ Manual Slot vs Auto Cassette Tray   │  │
+│  │ (Legal, Exec, Env)    │    │ (IPP media-source routing)          │  │
+│  └───────────────────────┘    └──────────────────┬──────────────────┘  │
+│                                                  │                     │
+│                               ┌──────────────────▼──────────────────┐  │
+│                               │ Resolution (300/600 DPI) & Economy  │  │
+│                               └─────────────────────────────────────┘  │
+└──────────────────────────────────────────────────┬─────────────────────┘
+                                                   │
+                                                   ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│            Milestone 3: Spooler Polish & Reliability (P1)              │
+│                                                                        │
+│  ┌───────────────────────┐    ┌─────────────────────────────────────┐  │
+│  │ IPP Spooler Reasons   │───▶│ Active Cancel-Job Handling          │  │
+│  │ (Native Toast Alerts) │    │ (0xE0A4 Buffer Purge & Reset)       │  │
+│  └───────────────────────┘    └──────────────────┬──────────────────┘  │
+│                                                  │                     │
+│                               ┌──────────────────▼──────────────────┐  │
+│                               │ Dynamic USB Hotplug & Auto-Recovery │  │
+│                               └─────────────────────────────────────┘  │
+└──────────────────────────────────────────────────┬─────────────────────┘
+                                                   │
+                                                   ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│                 Milestone 4: Advanced Polish (P2/P3)                   │
+│                                                                        │
+│  ┌───────────────────────┐    ┌─────────────────────────────────────┐  │
+│  │ Adaptive Text-        │───▶│ Lightweight System Tray Monitor     │  │
+│  │ Preserving Halftoning │    │ (capt-tray.exe quick-access icon)   │  │
+│  └───────────────────────┘    └──────────────────┬──────────────────┘  │
+│                                                  │                     │
+│                               ┌──────────────────▼──────────────────┐  │
+│                               │ CI/CD GitHub Actions & Whitepaper   │  │
+│                               └─────────────────────────────────────┘  │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
