@@ -47,7 +47,7 @@
   static inline void platform_mutex_unlock(platform_mutex_t *m) { LeaveCriticalSection(m); }
 
   static inline int platform_thread_create(void *(*func)(void *), void *arg) {
-      HANDLE h = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)func, arg, 0, NULL);
+      HANDLE h = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)(void (*)(void))func, arg, 0, NULL);
       if (!h) return -1;
       CloseHandle(h);
       return 0;

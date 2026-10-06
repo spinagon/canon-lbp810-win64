@@ -7,8 +7,13 @@
 #ifdef _WIN32
 #define strncasecmp _strnicmp
 #define strcasecmp  _stricmp
-#include <BaseTsd.h>
-#define ssize_t SSIZE_T
+#if defined(_MSC_VER)
+#include <basetsd.h>
+#ifndef _SSIZE_T_DEFINED
+typedef SSIZE_T ssize_t;
+#define _SSIZE_T_DEFINED
+#endif
+#endif
 #endif
 
 #define IPP_OP_PRINT_JOB               0x0002
