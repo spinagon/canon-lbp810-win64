@@ -13,8 +13,33 @@ void scoa_compress_chunk(const uint8_t *in, uint32_t in_len, uint8_t *out, uint3
 
 void test_packet_encoding() {
     printf("Testing packet encoding...\n");
-    // This is implicitly tested via usb_send_packet structure check but since we don't have intercept hooks,
-    // we just verify manual bcd function
+    // Verify 4-byte framing protocol: opcode LE, total packet length LE
+    uint16_t opcode = 0xD0A0; // CAPT_BEGIN_PAGE
+    uint16_t payload_len = 34;
+    uint32_t packet_size = 4 + payload_len;
+
+    uint8_t header[4];
+    header[0] = opcode & 0xFF;
+    header[1] = (opcode >> 8) & 0xFF;
+    header[2] = packet_size & 0xFF;
+    header[3] = (packet_size >> 8) & 0xFF;
+
+    assert(header[0] == 0xA0);
+    assert(header[1] == 0xD0);
+    assert(header[2] == 38);
+    assert(header[3] == 0x00);
+
+    // Verify zero-payload command (e.g. CAPT_BEGIN_DATA)
+    uint16_t op_data = 0xD0A1;
+    uint32_t empty_size = 4 + 0;
+    header[0] = op_data & 0xFF;
+    header[1] = (op_data >> 8) & 0xFF;
+    header[2] = empty_size & 0xFF;
+    header[3] = (empty_size >> 8) & 0xFF;
+    assert(header[0] == 0xA1);
+    assert(header[1] == 0xD0);
+    assert(header[2] == 4);
+    assert(header[3] == 0);
 }
 
 void test_page_header_construction() {

@@ -17,18 +17,26 @@
 #include <string.h>
 
 /* ── Global state ────────────────────────────────────── */
-static volatile bool g_stop = false;
-static capt_printer_t g_capt_dev;
-static bool           g_capt_connected = false;
-static uint16_t       g_port = 6631;
+static volatile bool      g_stop = false;
+static capt_printer_t     g_capt_dev;
+static bool               g_capt_connected = false;
+static uint16_t           g_port = 6631;
 
 #ifdef _WIN32
 static SERVICE_STATUS_HANDLE g_svc_handle = NULL;
 static SERVICE_STATUS        g_svc_status;
 #endif
 
-static volatile bool g_job_cancelled = false;
-static volatile bool g_is_printing    = false;
+static platform_mutex_t   g_capt_mutex;
+static volatile bool      g_job_cancelled = false;
+static volatile bool      g_is_printing    = false;
+static int                g_printer_state  = 3; // 3 = idle, 4 = processing, 5 = stopped
+static const char        *g_printer_state_reasons = "none";
+static bool               g_printer_accepting_jobs = true;
+
+static dither_algorithm_t g_dither_algo = DITHER_ADAPTIVE;
+static uint8_t            g_toner_density = 0x1F;
+static bool               g_force_toner_save = false;
 
 /* ── Build CAPT page params from PWG header ── */
 static void build_page_params(capt_page_params_t *params,
@@ -47,16 +55,19 @@ static void build_page_params(capt_page_params_t *params,
 
     /* Input Slot selection (Roadmap 2.2) */
     uint8_t input_slot = 0x01; // Default: Main auto cassette
-    if (hdr->manual_feed != 0 || hdr->media_position == 0 ||
-        paper->code == PAPER_ENV_COM10 || paper->code == PAPER_ENV_DL || paper->code == PAPER_ENV_C5) {
+    if (hdr->manual_feed != 0 ||
+        paper->code == PAPER_ENV_COM10 || paper->code == PAPER_ENV_DL || paper->code == PAPER_ENV_C5 ||
+        hdr->media_position == 2 /* manual tray in standard PWG */ ||
+        strstr(hdr->media_type, "manual") != NULL) {
         input_slot = 0x00; // Manual Feed Slot
         LOG_INFO("Selected manual feed slot (input_slot=0x00) for paper '%s'", paper->name);
+        LOG_INFO("Waiting for sheet in manual feed slot...");
     } else {
         LOG_INFO("Selected main cassette (input_slot=0x01) for paper '%s'", paper->name);
     }
 
     /* Print quality & Toner saving (Roadmap 2.3) */
-    uint8_t toner_saving = 0x00;
+    uint8_t toner_saving = g_force_toner_save ? 0x01 : 0x00;
     uint8_t smoothing = 0x02; // ON by default
     if (strstr(hdr->rendering_intent, "draft") != NULL ||
         hdr->pwg_integer[0] == 3 /* draft quality */) {
@@ -66,6 +77,7 @@ static void build_page_params(capt_page_params_t *params,
     }
 
     capt_build_page_params(params, paper->code, dpi, input_slot, toner_saving, smoothing);
+    memset(params->toner_density, g_toner_density, 4);
     LOG_INFO("Built page params: %s (%ux%u px, linesize=%u, lines=%u, %u DPI, slot=0x%02X, toner_save=0x%02X)",
              paper->name, params->paper_width, params->paper_height,
              params->image_line_size, params->image_lines, dpi,
@@ -85,11 +97,13 @@ static void get_ipp_status(ipp_printer_state_info_t *info, void *user_data)
 {
     (void)user_data;
     if (g_is_printing) {
-        info->printer_state = 4; // processing
-        info->state_reasons = "none";
-        info->is_accepting_jobs = true;
+        info->printer_state = g_printer_state;
+        info->state_reasons = g_printer_state_reasons;
+        info->is_accepting_jobs = g_printer_accepting_jobs;
         return;
     }
+
+    platform_mutex_lock(&g_capt_mutex);
 
     if (!g_capt_connected) {
         if (capt_open(&g_capt_dev) == 0) {
@@ -107,41 +121,49 @@ static void get_ipp_status(ipp_printer_state_info_t *info, void *user_data)
             actual >= 16) {
             capt_parse_status(raw, actual, &st);
             if (!st.cover_closed) {
-                info->printer_state = 5; // stopped
-                info->state_reasons = "door-open-error";
-                info->is_accepting_jobs = false;
+                g_printer_state = 5; // stopped
+                g_printer_state_reasons = "door-open-error";
+                g_printer_accepting_jobs = false;
             } else if (!st.cartridge_present) {
-                info->printer_state = 5; // stopped
-                info->state_reasons = "marker-supply-missing-error";
-                info->is_accepting_jobs = false;
+                g_printer_state = 5; // stopped
+                g_printer_state_reasons = "marker-supply-missing-error";
+                g_printer_accepting_jobs = false;
             } else if (!st.paper_available) {
-                info->printer_state = 5; // stopped
-                info->state_reasons = "media-empty-error";
-                info->is_accepting_jobs = false;
+                g_printer_state = 5; // stopped
+                g_printer_state_reasons = "media-empty-error";
+                g_printer_accepting_jobs = false;
             } else if (st.engine & 0x0100) {
-                info->printer_state = 5; // stopped
-                info->state_reasons = "media-jam-error";
-                info->is_accepting_jobs = false;
+                g_printer_state = 5; // stopped
+                g_printer_state_reasons = "media-jam-error";
+                g_printer_accepting_jobs = false;
             } else if (st.error) {
-                info->printer_state = 5; // stopped
-                info->state_reasons = "other";
-                info->is_accepting_jobs = false;
+                g_printer_state = 5; // stopped
+                g_printer_state_reasons = "other";
+                g_printer_accepting_jobs = false;
             } else {
-                info->printer_state = 3; // idle
-                info->state_reasons = "none";
-                info->is_accepting_jobs = true;
+                g_printer_state = 3; // idle
+                g_printer_state_reasons = "none";
+                g_printer_accepting_jobs = true;
             }
-            return;
         } else {
             /* USB error -> mark disconnected so next attempt re-probes */
             capt_close(&g_capt_dev);
             g_capt_connected = false;
+            g_printer_state = 3;
+            g_printer_state_reasons = "none";
+            g_printer_accepting_jobs = true;
         }
+    } else {
+        g_printer_state = 3;
+        g_printer_state_reasons = "none";
+        g_printer_accepting_jobs = true;
     }
 
-    info->printer_state = 3; // idle
-    info->state_reasons = "none";
-    info->is_accepting_jobs = true;
+    info->printer_state = g_printer_state;
+    info->state_reasons = g_printer_state_reasons;
+    info->is_accepting_jobs = g_printer_accepting_jobs;
+
+    platform_mutex_unlock(&g_capt_mutex);
 }
 
 /* ── Print callback: receives PWG-Raster from IPP, drives CAPT ── */
@@ -150,8 +172,13 @@ static void on_print_job(const uint8_t *pwg_data, size_t pwg_len, void *user_dat
     (void)user_data;
     LOG_INFO("Received print job: %zu bytes of PWG-Raster data", pwg_len);
 
+    platform_mutex_lock(&g_capt_mutex);
+
     g_job_cancelled = false;
     g_is_printing = true;
+    g_printer_state = 4; // processing
+    g_printer_state_reasons = "none";
+    g_printer_accepting_jobs = false;
 
     /* Open CAPT device if not already connected (with reconnect retries) */
     if (!g_capt_connected) {
@@ -166,6 +193,9 @@ static void on_print_job(const uint8_t *pwg_data, size_t pwg_len, void *user_dat
         if (!g_capt_connected) {
             LOG_ERROR("Cannot open Canon LBP-810 USB device");
             g_is_printing = false;
+            g_printer_state = 3;
+            g_printer_accepting_jobs = true;
+            platform_mutex_unlock(&g_capt_mutex);
             return;
         }
     }
@@ -176,6 +206,9 @@ static void on_print_job(const uint8_t *pwg_data, size_t pwg_len, void *user_dat
     if (pwg_open(&stream, pwg_data, pwg_len) != 0) {
         LOG_ERROR("Invalid PWG-Raster data (bad magic)");
         g_is_printing = false;
+        g_printer_state = 3;
+        g_printer_accepting_jobs = true;
+        platform_mutex_unlock(&g_capt_mutex);
         return;
     }
 
@@ -185,6 +218,9 @@ static void on_print_job(const uint8_t *pwg_data, size_t pwg_len, void *user_dat
         capt_close(&g_capt_dev);
         g_capt_connected = false;
         g_is_printing = false;
+        g_printer_state = 3;
+        g_printer_accepting_jobs = true;
+        platform_mutex_unlock(&g_capt_mutex);
         return;
     }
 
@@ -239,7 +275,7 @@ static void on_print_job(const uint8_t *pwg_data, size_t pwg_len, void *user_dat
             top_offset = params.margin_top;
         }
 
-        /* Decode each PWG scanline and apply adaptive text-preserving halftoning */
+        /* Decode each PWG scanline and apply requested halftoning */
         uint32_t y = 0;
         while (y < hdr.height && stream.offset < stream.data_len) {
             if (g_job_cancelled) {
@@ -257,13 +293,14 @@ static void on_print_job(const uint8_t *pwg_data, size_t pwg_len, void *user_dat
                 if (y >= top_offset && (y - top_offset) < params.image_lines) {
                     uint8_t *mono_row = mono_bitmap + ((y - top_offset) * mono_line_bytes);
                     if (hdr.bits_per_pixel == 1) {
-                        bool invert = (hdr.color_space == 18 /* sGray */);
+                        bool invert = (hdr.color_space == 18 /* sGray */ || hdr.color_space == 3);
                         for (uint32_t b = 0; b < mono_line_bytes; b++) {
-                            uint8_t byte = gray_line_buf[left_offset / 8 + b];
+                            uint32_t src_idx = left_offset / 8 + b;
+                            uint8_t byte = (src_idx < gray_line_bytes) ? gray_line_buf[src_idx] : (invert ? 0xFF : 0x00);
                             mono_row[b] = invert ? ~byte : byte;
                         }
                     } else {
-                        dither_line_adaptive(&dither, gray_line_buf + left_offset, mono_row);
+                        dither_render_line(&dither, gray_line_buf + left_offset, mono_row, (int)y, g_dither_algo);
                     }
                 }
             }
@@ -292,9 +329,19 @@ static void on_print_job(const uint8_t *pwg_data, size_t pwg_len, void *user_dat
         if (rc == -4) {
             LOG_WARN("Page %d printing cancelled by user", page_num);
             break;
+        } else if (rc == -2) {
+            LOG_ERROR("Page %d printing halted: Out of paper", page_num);
+            g_printer_state = 5;
+            g_printer_state_reasons = "media-empty-error";
+            break;
+        } else if (rc == -3) {
+            LOG_ERROR("Page %d printing halted: Cover open", page_num);
+            g_printer_state = 5;
+            g_printer_state_reasons = "door-open-error";
+            break;
         } else if (rc != 0) {
-            LOG_ERROR("Failed to print page %d: error %d", page_num, rc);
-            /* Reset USB on communication failure */
+            LOG_ERROR("Failed to print page %d: communication error %d", page_num, rc);
+            /* Reset USB only on hardware communication failure */
             capt_close(&g_capt_dev);
             g_capt_connected = false;
             break;
@@ -307,16 +354,28 @@ static void on_print_job(const uint8_t *pwg_data, size_t pwg_len, void *user_dat
     if (g_job_cancelled) {
         LOG_WARN("Executing CAPT cancel and buffer purge...");
         capt_cancel_job(&g_capt_dev);
+        g_printer_state = 3;
+        g_printer_state_reasons = "none";
+        g_printer_accepting_jobs = true;
     } else {
         capt_job_end(&g_capt_dev);
+        if (g_printer_state == 4) {
+            g_printer_state = 3;
+            g_printer_state_reasons = "none";
+            g_printer_accepting_jobs = true;
+        }
     }
     LOG_INFO("Print job finished: %d page(s)", page_num);
     g_is_printing = false;
+
+    platform_mutex_unlock(&g_capt_mutex);
 }
 
 /* ── Server main loop ─────────────────────────────────── */
 static int run_server(void)
 {
+    platform_mutex_init(&g_capt_mutex);
+
     /* Try to open the CAPT device at startup */
     if (capt_open(&g_capt_dev) == 0) {
         g_capt_connected = true;
@@ -345,6 +404,7 @@ static int run_server(void)
         g_capt_connected = false;
     }
 
+    platform_mutex_destroy(&g_capt_mutex);
     return rc;
 }
 
@@ -415,12 +475,30 @@ int main(int argc, char *argv[])
             console_mode = true;
         } else if ((strcmp(argv[i], "--port") == 0 || strcmp(argv[i], "-p") == 0) && i + 1 < argc) {
             g_port = (uint16_t)atoi(argv[++i]);
+        } else if ((strcmp(argv[i], "--dither") == 0 || strcmp(argv[i], "-d") == 0) && i + 1 < argc) {
+            const char *algo = argv[++i];
+            if (strcmp(algo, "adaptive") == 0) g_dither_algo = DITHER_ADAPTIVE;
+            else if (strcmp(algo, "fs") == 0 || strcmp(algo, "floyd-steinberg") == 0) g_dither_algo = DITHER_FLOYD_STEINBERG;
+            else if (strcmp(algo, "atkinson") == 0) g_dither_algo = DITHER_ATKINSON;
+            else if (strcmp(algo, "bayer") == 0 || strcmp(algo, "bayer8x8") == 0) g_dither_algo = DITHER_BAYER_8X8;
+            else if (strcmp(algo, "threshold") == 0) g_dither_algo = DITHER_THRESHOLD;
+        } else if (strcmp(argv[i], "--density") == 0 && i + 1 < argc) {
+            int d = atoi(argv[++i]);
+            if (d < 1) d = 1;
+            if (d > 5) d = 5;
+            static const uint8_t levels[5] = { 0x06, 0x0C, 0x13, 0x19, 0x1F };
+            g_toner_density = levels[d - 1];
+        } else if (strcmp(argv[i], "--toner-save") == 0) {
+            g_force_toner_save = true;
         } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             printf("Canon LBP-810 CAPT Print Service\n\n");
             printf("Usage: %s [OPTIONS]\n\n", argv[0]);
             printf("Options:\n");
             printf("  --console, -c          Run in console mode (foreground)\n");
             printf("  --port, -p <PORT>      IPP listen port (default: 6631)\n");
+            printf("  --dither, -d <ALGO>    Dithering: adaptive, fs, atkinson, bayer, threshold\n");
+            printf("  --density <1-5>        Toner density level (1=lightest, 5=darkest)\n");
+            printf("  --toner-save           Force toner saving draft mode\n");
             printf("  --help, -h             Show this help\n");
             printf("\nWhen run without --console, starts as a Windows service.\n");
             printf("Use install/install.ps1 to install the service.\n");

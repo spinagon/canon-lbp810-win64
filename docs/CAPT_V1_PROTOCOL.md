@@ -28,21 +28,21 @@ All command transmissions and responses across EP2 / EP1 follow a 4-byte fixed h
  0                   1                   2                   3
  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|       Opcode (16-bit LE)      |    BCD Length (16-bit BE)     |
+|       Opcode (16-bit LE)      |   Packet Length (16-bit LE)   |
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 |                  Optional Payload Data ...                    |
 ```
 
 - **Bytes 0–1 (Opcode)**: 16-bit integer in Little-Endian byte order. Example: `0xD0A0` is sent as byte `0xA0`, then byte `0xD0`.
-- **Bytes 2–3 (Payload Length)**: Payload size encoded in 4-digit Binary Coded Decimal (BCD), Big-Endian byte order.
-  - Length `0` &rarr; `0x00`, `0x00`
-  - Length `8` &rarr; `0x00`, `0x08`
-  - Length `34` &rarr; `0x00`, `0x34`
-  - Length `4096` &rarr; `0x40`, `0x96`
+- **Bytes 2–3 (Total Packet Length)**: 16-bit integer in Little-Endian byte order representing total packet length including the 4-byte header (`4 + payload_len`).
+  - No payload (`0` bytes) &rarr; `0x04`, `0x00` (4 bytes total)
+  - `8` bytes payload &rarr; `0x0C`, `0x00` (12 bytes total)
+  - `34` bytes payload &rarr; `0x26`, `0x00` (38 bytes total)
+  - `4096` bytes payload &rarr; `0x04`, `0x10` (4100 bytes total)
 
 ### 2.2 Device-to-Host (Bulk IN) Response Header
 
-Bulk IN responses mirror the opcode in bytes 0–1, followed by a 2-byte BCD length indicating the subsequent payload bytes returned by the printer controller.
+Bulk IN responses mirror the opcode in bytes 0–1 (LE), followed by a 2-byte size in bytes 2–3 indicating the response length. Depending on the command response, certain engine status responses report this length in 4-digit BCD format (handled via `bcd_decode`).
 
 ---
 

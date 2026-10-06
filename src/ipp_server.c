@@ -467,6 +467,19 @@ static int handle_client(socket_t sock, const ipp_server_config_t *config) {
     return 0;
 }
 
+typedef struct {
+    socket_t sock;
+    const ipp_server_config_t *config;
+} client_thread_arg_t;
+
+static void *client_thread_worker(void *arg) {
+    client_thread_arg_t *cta = (client_thread_arg_t *)arg;
+    handle_client(cta->sock, cta->config);
+    close_socket(cta->sock);
+    free(cta);
+    return NULL;
+}
+
 int ipp_server_run(const ipp_server_config_t *config) {
     g_startup_time = (uint32_t)time(NULL);
     g_stop_server = false;
@@ -520,8 +533,19 @@ int ipp_server_run(const ipp_server_config_t *config) {
             socklen_t client_len = sizeof(client_addr);
             socket_t client = accept(srv, (struct sockaddr*)&client_addr, &client_len);
             if (client != INVALID_SOCK) {
-                handle_client(client, config);
-                close_socket(client);
+                client_thread_arg_t *cta = (client_thread_arg_t *)malloc(sizeof(client_thread_arg_t));
+                if (cta) {
+                    cta->sock = client;
+                    cta->config = config;
+                    if (platform_thread_create(client_thread_worker, cta) != 0) {
+                        handle_client(client, config);
+                        close_socket(client);
+                        free(cta);
+                    }
+                } else {
+                    handle_client(client, config);
+                    close_socket(client);
+                }
             }
         }
     }

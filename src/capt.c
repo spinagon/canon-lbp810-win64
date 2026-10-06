@@ -79,8 +79,8 @@ const capt_paper_info_t *capt_get_paper_info_by_name(const char *name) {
 }
 
 const capt_paper_info_t *capt_get_paper_info_by_dims(uint32_t width_px, uint32_t height_px, uint32_t dpi) {
-    uint32_t w600 = (dpi < 600 && dpi > 0) ? (width_px * 600 / dpi) : width_px;
-    uint32_t h600 = (dpi < 600 && dpi > 0) ? (height_px * 600 / dpi) : height_px;
+    uint32_t w600 = (dpi > 0 && dpi != 600) ? (width_px * 600 / dpi) : width_px;
+    uint32_t h600 = (dpi > 0 && dpi != 600) ? (height_px * 600 / dpi) : height_px;
 
     const capt_paper_info_t *best = &s_paper_table[0]; // A4 default
     uint32_t min_diff = UINT32_MAX;
@@ -283,6 +283,7 @@ int capt_job_end(capt_printer_t *printer) {
 }
 
 int capt_cancel_job(capt_printer_t *printer) {
+    if (!printer) return -1;
     LOG_WARN("Executing CAPT job cancellation and engine buffer purge (0xE0A4)...");
     uint8_t buf[16];
     uint16_t actual = 0;
@@ -305,6 +306,7 @@ int capt_cancel_job(capt_printer_t *printer) {
     usb_send_packet(&printer->usb, CAPT_RELEASE_UNIT, NULL, 0);
     usb_recv_packet(&printer->usb, CAPT_RELEASE_UNIT, buf, sizeof(buf), &actual);
 
+    printer->page_counter = 0;
     LOG_INFO("CAPT job cancellation completed");
     return 0;
 }
@@ -315,14 +317,12 @@ int capt_print_page(capt_printer_t *printer, const capt_page_params_t *params,
 
     if (printer->cancel_flag && *(printer->cancel_flag)) {
         LOG_WARN("Print page aborted before start: job cancelled");
-        capt_cancel_job(printer);
         return -4;
     }
 
     /* Check printer readiness before sending data */
     if (wait_printer_ready(printer, 5000) != 0) {
         if (printer->cancel_flag && *(printer->cancel_flag)) {
-            capt_cancel_job(printer);
             return -4;
         }
         capt_status_t st;
@@ -396,7 +396,6 @@ int capt_print_page(capt_printer_t *printer, const capt_page_params_t *params,
         if (printer->cancel_flag && *(printer->cancel_flag)) {
             LOG_WARN("Job cancelled during SCoA streaming at line %u", line);
             scoa_free(&scoa);
-            capt_cancel_job(printer);
             return -4;
         }
 
@@ -444,13 +443,18 @@ int capt_print_page(capt_printer_t *printer, const capt_page_params_t *params,
     bool delivered = false;
 
     /* Physical laser pickup and heating cycle takes at least 3-4 seconds */
-    SLEEP_MS(3000);
-    elapsed += 3000;
+    for (int i = 0; i < 30; i++) {
+        if (printer->cancel_flag && *(printer->cancel_flag)) {
+            LOG_WARN("Job cancelled while waiting for pickup cycle");
+            return -4;
+        }
+        SLEEP_MS(100);
+        elapsed += 100;
+    }
 
     do {
         if (printer->cancel_flag && *(printer->cancel_flag)) {
             LOG_WARN("Job cancelled while waiting for page delivery");
-            capt_cancel_job(printer);
             return -4;
         }
         if (get_extended_status(printer, &status) == 0) {

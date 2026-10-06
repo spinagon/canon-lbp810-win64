@@ -149,17 +149,29 @@ static void test_dither() {
     dither_line_atkinson(&ctx, in_black, out);
     assert(out[0] == 0xFF && out[1] == 0xFF);
 
+    // Atkinson with mid-tone gray (128) produces checker/diffusion pattern
+    dither_line_atkinson(&ctx, in_gray, out);
+    assert(out[0] != 0 && out[0] != 0xFF); // Mixed dots
+
     // Bayer 8x8 Ordered Dithering (Roadmap 4.2)
     dither_line_bayer8x8(in_white, out, width, 0);
     assert(out[0] == 0 && out[1] == 0);
     dither_line_bayer8x8(in_black, out, width, 0);
     assert(out[0] == 0xFF && out[1] == 0xFF);
+    dither_line_bayer8x8(in_gray, out, width, 0);
+    assert(out[0] != 0 && out[0] != 0xFF); // Deterministic thresholded dots
 
-    // Dither render dispatch
+    // Dither render dispatch for all supported algorithms
+    dither_render_line(&ctx, in_white, out, 0, DITHER_FLOYD_STEINBERG);
+    assert(out[0] == 0 && out[1] == 0);
     dither_render_line(&ctx, in_white, out, 0, DITHER_ADAPTIVE);
     assert(out[0] == 0 && out[1] == 0);
+    dither_render_line(&ctx, in_black, out, 0, DITHER_ATKINSON);
+    assert(out[0] == 0xFF && out[1] == 0xFF);
     dither_render_line(&ctx, in_black, out, 0, DITHER_BAYER_8X8);
     assert(out[0] == 0xFF && out[1] == 0xFF);
+    dither_render_line(&ctx, in_gray, out, 0, DITHER_THRESHOLD);
+    assert(out[0] == 0x00 && out[1] == 0x00);
     
     dither_free(&ctx);
     printf("Dither multi-algorithm tests passed.\n");

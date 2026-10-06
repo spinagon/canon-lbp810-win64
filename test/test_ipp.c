@@ -20,7 +20,13 @@ static ipp_printer_state_info_t g_mock_status = {
     .is_accepting_jobs = true
 };
 
+static void (*g_active_on_print)(const uint8_t *, size_t, void *) = NULL;
+
 static void on_print(const uint8_t *pwg_data, size_t pwg_len, void *user_data) {
+    if (g_active_on_print) {
+        g_active_on_print(pwg_data, pwg_len, user_data);
+        return;
+    }
     (void)user_data;
     g_print_job_count++;
     g_last_pwg_len = pwg_len;
@@ -308,6 +314,131 @@ static void test_chunked_transfer(void) {
     printf("Test chunked transfer passed.\n");
 }
 
+static volatile bool g_concurrent_print_started = false;
+static volatile bool g_concurrent_print_detected_cancel = false;
+
+static void on_concurrent_print(const uint8_t *pwg_data, size_t pwg_len, void *user_data) {
+    (void)pwg_data; (void)pwg_len; (void)user_data;
+    g_concurrent_print_started = true;
+    for (int i = 0; i < 50; i++) {
+        if (g_cancel_called) {
+            g_concurrent_print_detected_cancel = true;
+            break;
+        }
+        platform_sleep_ms(20);
+    }
+}
+
+typedef struct {
+    socket_t sock;
+    uint8_t *req;
+    size_t   req_len;
+} print_sender_arg_t;
+
+static void *print_sender_thread(void *arg) {
+    print_sender_arg_t *p = (print_sender_arg_t *)arg;
+    char http_req[1024];
+    snprintf(http_req, sizeof(http_req),
+             "POST /printers/canon-lbp810 HTTP/1.1\r\n"
+             "Content-Length: %zu\r\n\r\n", p->req_len);
+    send(p->sock, http_req, (int)strlen(http_req), 0);
+    send(p->sock, (const char *)p->req, (int)p->req_len, 0);
+
+    char resp[1024];
+    recv(p->sock, resp, sizeof(resp), 0);
+    return NULL;
+}
+
+static void test_concurrent_cancel_during_print(void) {
+    g_cancel_called = false;
+    g_concurrent_print_started = false;
+    g_concurrent_print_detected_cancel = false;
+    g_active_on_print = on_concurrent_print;
+
+    socket_t print_sock = connect_server();
+    assert(print_sock != INVALID_SOCK);
+
+    uint8_t ipp_req[] = {
+        0x02, 0x00,
+        0x00, 0x02, // Print-Job
+        0x00, 0x00, 0x00, 0x05, // Request ID 5
+        0x01, // Operation attributes
+        0x47, 0x00, 0x12, 'a', 't', 't', 'r', 'i', 'b', 'u', 't', 'e', 's', '-', 'c', 'h', 'a', 'r', 's', 'e', 't', 0x00, 0x05, 'u', 't', 'f', '-', '8',
+        0x03, // End of attributes
+        'P', 'W', 'G', 'R', 'A', 'S', 'T', 'E', 'R'
+    };
+
+    print_sender_arg_t sender_arg = {
+        .sock = print_sock,
+        .req = ipp_req,
+        .req_len = sizeof(ipp_req)
+    };
+
+#ifdef _WIN32
+    HANDLE send_th = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)print_sender_thread, &sender_arg, 0, NULL);
+    assert(send_th != NULL);
+#else
+    pthread_t send_th;
+    int prc = pthread_create(&send_th, NULL, print_sender_thread, &sender_arg);
+    assert(prc == 0);
+#endif
+
+    // Wait until the print job starts and is actively printing
+    for (int i = 0; i < 100; i++) {
+        if (g_concurrent_print_started) break;
+        platform_sleep_ms(10);
+    }
+    assert(g_concurrent_print_started == true);
+
+    // Now, while the print job is STILL running in the background, send Cancel-Job on a new connection
+    socket_t cancel_sock = connect_server();
+    assert(cancel_sock != INVALID_SOCK);
+
+    uint8_t cancel_req[] = {
+        0x02, 0x00,
+        0x00, 0x08, // Cancel-Job
+        0x00, 0x00, 0x00, 0x06,
+        0x01,
+        0x47, 0x00, 0x12, 'a', 't', 't', 'r', 'i', 'b', 'u', 't', 'e', 's', '-', 'c', 'h', 'a', 'r', 's', 'e', 't', 0x00, 0x05, 'u', 't', 'f', '-', '8',
+        0x03
+    };
+
+    char cancel_http[1024];
+    snprintf(cancel_http, sizeof(cancel_http),
+             "POST /printers/canon-lbp810 HTTP/1.1\r\n"
+             "Content-Length: %zu\r\n\r\n", sizeof(cancel_req));
+    send(cancel_sock, cancel_http, (int)strlen(cancel_http), 0);
+    send(cancel_sock, (const char *)cancel_req, (int)sizeof(cancel_req), 0);
+
+    char cancel_resp[4096];
+    int rlen = 0;
+    while (rlen < (int)sizeof(cancel_resp) - 1) {
+        int r = recv(cancel_sock, cancel_resp + rlen, (int)sizeof(cancel_resp) - 1 - rlen, 0);
+        if (r <= 0) break;
+        rlen += r;
+    }
+    assert(rlen > 0);
+    cancel_resp[rlen] = '\0';
+    close_socket(cancel_sock);
+
+    assert(strstr(cancel_resp, "HTTP/1.1 200 OK") != NULL);
+    assert(contains_bytes(cancel_resp, rlen, "job-canceled-by-user"));
+
+#ifdef _WIN32
+    WaitForSingleObject(send_th, INFINITE);
+    CloseHandle(send_th);
+#else
+    pthread_join(send_th, NULL);
+#endif
+    close_socket(print_sock);
+
+    assert(g_cancel_called == true);
+    assert(g_concurrent_print_detected_cancel == true);
+
+    g_active_on_print = NULL;
+    printf("Test concurrent Cancel-Job during active print passed.\n");
+}
+
 int main(void) {
     printf("Running IPP tests...\n");
     platform_net_init();
@@ -325,6 +456,7 @@ int main(void) {
     test_cancel_job();
     test_print_job();
     test_chunked_transfer();
+    test_concurrent_cancel_during_print();
 
     g_stop_flag = true;
     ipp_server_stop();
