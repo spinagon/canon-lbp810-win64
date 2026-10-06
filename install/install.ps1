@@ -86,29 +86,43 @@ if (-not $ServicePath -or -not (Test-Path $ServicePath)) {
 }
 Write-Host "  Service binary: $ServicePath"
 
-# Step 1: Check that the LBP-810 USB device is using WinUSB
+# Step 1: Checking and configuring USB device driver (Roadmap Phase 1.1)
 Write-Host ""
-Write-Host "Step 1: Checking USB device driver..." -ForegroundColor White
+Write-Host "Step 1: Checking and configuring USB device driver..." -ForegroundColor White
+$infPath = Join-Path $PSScriptRoot "capt-lbp810.inf"
 $usbDevice = Get-PnpDevice -PresentOnly | Where-Object {
     $_.InstanceId -like "*VID_04A9&PID_260A*"
 } | Select-Object -First 1
 
 if (-not $usbDevice) {
-    Write-Warning "Canon LBP-810 USB device not detected!"
-    Write-Host "  Make sure the printer is connected via USB."
-    Write-Host "  You may still install the service and connect the printer later."
+    Write-Warning "Canon LBP-810 USB device not currently plugged in."
+    if (Test-Path $infPath) {
+        Write-Host "  Pre-staging capt-lbp810.inf to Windows Driver Store via pnputil..."
+        & pnputil.exe /add-driver "$infPath" | Out-Null
+        Write-Host "  Driver pre-staged successfully. Windows will automatically bind WinUSB when connected." -ForegroundColor Green
+    }
 } else {
     Write-Host "  Found: $($usbDevice.FriendlyName) ($($usbDevice.InstanceId))"
-    if ($usbDevice.Service -eq "usbprint") {
-        Write-Warning "  The printer is still using usbprint.sys driver."
-        Write-Host "  You MUST switch to WinUSB using one of these methods:"
-        Write-Host "    Option A: Device Manager -> Update Driver -> Browse -> capt-lbp810.inf"
-        Write-Host "    Option B: Use Zadig (https://zadig.akeo.ie/) to replace the driver"
-        Write-Host ""
-        $continue = Read-Host "  Continue installation anyway? (y/n)"
-        if ($continue -ne 'y') { exit 1 }
-    } elseif ($usbDevice.Service -eq "WinUSB") {
+    if ($usbDevice.Service -eq "WinUSB") {
         Write-Host "  Driver: WinUSB (correct!)" -ForegroundColor Green
+    } else {
+        Write-Host "  Current driver: $($usbDevice.Service). Attempting automated WinUSB driver binding..." -ForegroundColor Yellow
+        if (Test-Path $infPath) {
+            $pnpResult = & pnputil.exe /add-driver "$infPath" /install
+            Start-Sleep -Seconds 2
+            # Re-check device service
+            $recheck = Get-PnpDevice -PresentOnly | Where-Object {
+                $_.InstanceId -like "*VID_04A9&PID_260A*"
+            } | Select-Object -First 1
+            if ($recheck -and $recheck.Service -eq "WinUSB") {
+                Write-Host "  Successfully switched driver to WinUSB via PnPUtil!" -ForegroundColor Green
+            } else {
+                Write-Warning "  PnPUtil could not automatically replace $($usbDevice.Service) with WinUSB."
+                Write-Host "  You may manually install the driver:"
+                Write-Host "    Option A: Device Manager -> Update Driver -> Browse -> $infPath"
+                Write-Host "    Option B: Use Zadig (https://zadig.akeo.ie/) to replace with WinUSB"
+            }
+        }
     }
 }
 

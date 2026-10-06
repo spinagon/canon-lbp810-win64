@@ -166,8 +166,18 @@ static void handle_ipp_request(const uint8_t *req, size_t req_len, uint8_t **res
         write_attr_str(&p, "printer-info", config->printer_name, IPP_TAG_TEXT_WITHOUT_LANGUAGE);
         write_attr_str(&p, "printer-device-id", "MFG:Canon;MDL:LBP-810;CMD:PWG,URF;CLS:PRINTER;DES:Canon LBP-810;", IPP_TAG_TEXT_WITHOUT_LANGUAGE);
         write_attr_str(&p, "printer-uuid", "urn:uuid:b3e84dd6-9c49-4331-97c7-7a8e37391def", IPP_TAG_URI);
-        write_attr_int(&p, "printer-state", 3, IPP_TAG_ENUM); // 3 = idle
-        write_attr_str(&p, "printer-state-reasons", "none", IPP_TAG_KEYWORD);
+
+        ipp_printer_state_info_t state_info = {
+            .printer_state = 3, // 3 = idle
+            .state_reasons = "none",
+            .is_accepting_jobs = true
+        };
+        if (config->get_status) {
+            config->get_status(&state_info, config->user_data);
+        }
+
+        write_attr_int(&p, "printer-state", state_info.printer_state, IPP_TAG_ENUM);
+        write_attr_str(&p, "printer-state-reasons", state_info.state_reasons, IPP_TAG_KEYWORD);
         write_attr_str(&p, "ipp-versions-supported", "1.1", IPP_TAG_KEYWORD);
         write_attr_str(&p, NULL, "2.0", IPP_TAG_KEYWORD);
         write_attr_str(&p, NULL, "1.0", IPP_TAG_KEYWORD);
@@ -191,8 +201,8 @@ static void handle_ipp_request(const uint8_t *req, size_t req_len, uint8_t **res
         write_attr_str(&p, "urf-supported", "V1.4,W8,CP1,RS300-600", IPP_TAG_KEYWORD);
         write_attr_str(&p, "pwg-raster-document-sheet-back", "normal", IPP_TAG_KEYWORD);
         
-        write_attr_bool(&p, "printer-is-accepting-jobs", true);
-        write_attr_int(&p, "queued-job-count", 0, IPP_TAG_INTEGER);
+        write_attr_bool(&p, "printer-is-accepting-jobs", state_info.is_accepting_jobs);
+        write_attr_int(&p, "queued-job-count", (state_info.printer_state == 4) ? 1 : 0, IPP_TAG_INTEGER);
         write_attr_str(&p, "pdl-override-supported", "attempted", IPP_TAG_KEYWORD);
         write_attr_int(&p, "printer-up-time", (int32_t)(time(NULL) - g_startup_time), IPP_TAG_INTEGER);
         write_attr_str(&p, "compression-supported", "none", IPP_TAG_KEYWORD);
@@ -200,11 +210,26 @@ static void handle_ipp_request(const uint8_t *req, size_t req_len, uint8_t **res
         write_attr_int(&p, "copies-default", 1, IPP_TAG_INTEGER);
         write_attr_str(&p, "sides-supported", "one-sided", IPP_TAG_KEYWORD);
         write_attr_str(&p, "sides-default", "one-sided", IPP_TAG_KEYWORD);
+
+        /* Extended media sizes (Roadmap 2.1) */
         write_attr_str(&p, "media-supported", "iso_a4_210x297mm", IPP_TAG_KEYWORD);
         write_attr_str(&p, NULL, "na_letter_8.5x11in", IPP_TAG_KEYWORD);
+        write_attr_str(&p, NULL, "na_legal_8.5x14in", IPP_TAG_KEYWORD);
+        write_attr_str(&p, NULL, "na_executive_7.25x10.5in", IPP_TAG_KEYWORD);
+        write_attr_str(&p, NULL, "iso_a5_148x210mm", IPP_TAG_KEYWORD);
+        write_attr_str(&p, NULL, "jis_b5_182x257mm", IPP_TAG_KEYWORD);
+        write_attr_str(&p, NULL, "na_number-10_4.125x9.5in", IPP_TAG_KEYWORD);
+        write_attr_str(&p, NULL, "iso_dl_110x220mm", IPP_TAG_KEYWORD);
+        write_attr_str(&p, NULL, "iso_c5_162x229mm", IPP_TAG_KEYWORD);
         write_attr_str(&p, "media-default", "iso_a4_210x297mm", IPP_TAG_KEYWORD);
         write_attr_str(&p, "media-ready", "iso_a4_210x297mm", IPP_TAG_KEYWORD);
         write_attr_str(&p, "media-col-supported", "media-size", IPP_TAG_KEYWORD);
+
+        /* Media Source / Tray Selection (Roadmap 2.2) */
+        write_attr_str(&p, "media-source-supported", "auto", IPP_TAG_KEYWORD);
+        write_attr_str(&p, NULL, "manual", IPP_TAG_KEYWORD);
+        write_attr_str(&p, NULL, "tray-1", IPP_TAG_KEYWORD);
+        write_attr_str(&p, "media-source-default", "auto", IPP_TAG_KEYWORD);
         
         write_attr_resolution(&p, "printer-resolution-default", 600, 600, 3);
         write_attr_resolution(&p, "printer-resolution-supported", 300, 300, 3);
@@ -212,7 +237,12 @@ static void handle_ipp_request(const uint8_t *req, size_t req_len, uint8_t **res
         
         write_attr_int(&p, "orientation-requested-supported", 3, IPP_TAG_ENUM);
         write_attr_int(&p, NULL, 4, IPP_TAG_ENUM);
-        write_attr_int(&p, "print-quality-supported", 4, IPP_TAG_ENUM);
+
+        /* Print Quality: 3=draft, 4=normal, 5=high (Roadmap 2.3) */
+        write_attr_int(&p, "print-quality-supported", 3, IPP_TAG_ENUM);
+        write_attr_int(&p, NULL, 4, IPP_TAG_ENUM);
+        write_attr_int(&p, NULL, 5, IPP_TAG_ENUM);
+        write_attr_int(&p, "print-quality-default", 4, IPP_TAG_ENUM);
         
         write_attr_bool(&p, "color-supported", false);
         write_attr_str(&p, "printer-make-and-model", "Microsoft IPP Class Driver", IPP_TAG_TEXT_WITHOUT_LANGUAGE);
@@ -271,7 +301,14 @@ static void handle_ipp_request(const uint8_t *req, size_t req_len, uint8_t **res
     } else if (op_id == IPP_OP_GET_JOBS) {
         // Empty job list
     } else if (op_id == IPP_OP_CANCEL_JOB) {
-        // Cancelled
+        LOG_INFO("Cancel-Job operation received from spooler");
+        write_u8(&p, IPP_TAG_JOB_ATTRIBUTES);
+        write_attr_int(&p, "job-id", 1, IPP_TAG_INTEGER);
+        write_attr_int(&p, "job-state", 7, IPP_TAG_ENUM); // 7 = canceled
+        write_attr_str(&p, "job-state-reasons", "job-canceled-by-user", IPP_TAG_KEYWORD);
+        if (config->on_cancel) {
+            config->on_cancel(config->user_data);
+        }
     }
 
     write_u8(&p, IPP_TAG_END_OF_ATTRIBUTES);

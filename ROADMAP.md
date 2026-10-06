@@ -8,23 +8,23 @@ This roadmap outlines the path from the current functional MVP to a flawless, pr
 
 The table below is sorted by **Priority** (from immediate high-impact essentials to advanced polish), cross-referenced with **Implementation Difficulty** (Trivial to Complex).
 
-| Item | Focus Area | Priority | Difficulty | Impact |
-| :--- | :--- | :---: | :---: | :--- |
-| **Silent WinUSB Driver Provisioning** | Installer | **P0** | **Medium** | Eliminates Zadig/manual Device Manager steps; installs driver with one click |
-| **All-in-One MSI / WiX Installer** | Installer | **P0** | **Medium** | Single standard Windows installer (.msi) with silent switch and clean rollback |
-| **Extended Paper Formats (Legal, Exec, Env)** | Capabilities | **P1** | **Low** | Native support for Legal, Executive, A5, B5, and Envelopes (DL, COM10, C5) |
-| **Manual Feed Slot & Tray Selection** | Capabilities | **P1** | **Low** | Auto-cassette (`0x01`) vs manual slot (`0x00`) selection via print properties |
-| **Active Job Cancellation (`Cancel-Job`)** | Spooler / Core | **P1** | **Medium** | Canceling from Windows Spooler sends `0xE0A4` to flush engine buffer cleanly |
-| **Bidirectional Spooler Status (Toast Alerts)** | Spooler / UX | **P1** | **Medium** | Native Windows alerts for "Out of Paper", "Door Open", "Paper Jam", "Cartridge Missing" |
-| **Automated One-Click Diagnostics Script** | Tooling | **P1** | **Low** | `diagnose.ps1` checks USB hardware, WinUSB binding, port 6631, and spooler health |
-| **Comprehensive Protocol Whitepaper** | Documentation | **P1** | **Low** | Complete formal specification of CAPT v1 packet headers, opcodes, and SCoA format |
-| **CI/CD Automated Build & Release Pipeline** | Infrastructure| **P1** | **Medium** | GitHub Actions matrix (Linux ASan/UBSan, MinGW cross-compile, MSVC native, MSI release) |
-| **Resolution Selection (300 vs 600 DPI)** | Capabilities | **P2** | **Low** | Allows selecting Draft/Fast (300 DPI) or High Quality (600 DPI) in print dialog |
-| **Toner Save & Density Controls** | Capabilities | **P2** | **Low** | Exposes toner saving mode (`toner_saving=0x01`) and 5-level density (0x00–0x1F) |
-| **Adaptive Text-Preserving Halftoning** | Rendering | **P2** | **Medium** | Sharp black/white thresholding for text/line art + Floyd-Steinberg for images |
-| **Dynamic USB Hotplug & Auto-Recovery** | Core / USB | **P2** | **Medium** | Seamless reconnect if printer is power-cycled or unplugged during service operation |
-| **Lightweight System Tray Companion App** | UX / Tooling | **P2** | **Medium** | System tray icon (`capt-tray.exe`) showing real-time status, quick test print, logs |
-| **Windows Print Support App (PSA / WinUI 3)** | UX / Platform | **P3** | **High** | Modern Windows 10/11 UWP/WinUI print preferences and notification extension |
+| Item | Focus Area | Priority | Difficulty | Status | Impact |
+| :--- | :--- | :---: | :---: | :---: | :--- |
+| **Silent WinUSB Driver Provisioning** | Installer | **P0** | **Medium** | ✅ **Done** (`install.ps1`) | Eliminates Zadig/manual Device Manager steps; installs driver with one click |
+| **All-in-One MSI / WiX Installer** | Installer | **P0** | **Medium** | ⏳ Planned | Single standard Windows installer (.msi) with silent switch and clean rollback |
+| **Extended Paper Formats (Legal, Exec, Env)** | Capabilities | **P1** | **Low** | ✅ **Done** | Native support for Legal, Executive, A5, B5, and Envelopes (DL, COM10, C5) |
+| **Manual Feed Slot & Tray Selection** | Capabilities | **P1** | **Low** | ✅ **Done** | Auto-cassette (`0x01`) vs manual slot (`0x00`) selection via print properties |
+| **Active Job Cancellation (`Cancel-Job`)** | Spooler / Core | **P1** | **Medium** | ✅ **Done** | Canceling from Windows Spooler sends `0xE0A4` to flush engine buffer cleanly |
+| **Bidirectional Spooler Status (Toast Alerts)** | Spooler / UX | **P1** | **Medium** | ✅ **Done** | Native Windows alerts for "Out of Paper", "Door Open", "Paper Jam", "Cartridge Missing" |
+| **Automated One-Click Diagnostics Script** | Tooling | **P1** | **Low** | ✅ **Done** (`diagnose.ps1`) | `diagnose.ps1` checks USB hardware, WinUSB binding, port 6631, and spooler health |
+| **Comprehensive Protocol Whitepaper** | Documentation | **P1** | **Low** | ✅ **Done** (`docs/`) | Complete formal specification of CAPT v1 packet headers, opcodes, and SCoA format |
+| **CI/CD Automated Build & Release Pipeline** | Infrastructure| **P1** | **Medium** | ✅ **Done** (`.github/`) | GitHub Actions matrix (Linux ASan/UBSan, MinGW cross-compile, MSVC native, MSI release) |
+| **Resolution Selection (300 vs 600 DPI)** | Capabilities | **P2** | **Low** | ✅ **Done** | Allows selecting Draft/Fast (300 DPI) or High Quality (600 DPI) in print dialog |
+| **Toner Save & Density Controls** | Capabilities | **P2** | **Low** | ✅ **Done** | Exposes toner saving mode (`toner_saving=0x01`) and 5-level density (0x00–0x1F) |
+| **Adaptive Text-Preserving Halftoning** | Rendering | **P2** | **Medium** | ✅ **Done** | Sharp black/white thresholding for text/line art + Floyd-Steinberg for images |
+| **Dynamic USB Hotplug & Auto-Recovery** | Core / USB | **P2** | **Medium** | ✅ **Done** | Seamless reconnect if printer is power-cycled or unplugged during service operation |
+| **Lightweight System Tray Companion App** | UX / Tooling | **P2** | **Medium** | ⏳ Planned | System tray icon (`capt-tray.exe`) showing real-time status, quick test print, logs |
+| **Windows Print Support App (PSA / WinUI 3)** | UX / Platform | **P3** | **High** | ⏳ Planned | Modern Windows 10/11 UWP/WinUI print preferences and notification extension |
 
 ---
 

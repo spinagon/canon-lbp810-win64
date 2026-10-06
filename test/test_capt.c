@@ -60,13 +60,124 @@ void test_bcd_decode() {
     assert(decoded == 64);
 }
 
+void test_extended_paper_sizes() {
+    printf("Testing extended paper sizes...\n");
+    
+    // Check all 9 formats exist and have valid properties
+    uint8_t codes[] = {
+        PAPER_A4, PAPER_LETTER, PAPER_LEGAL, PAPER_EXEC,
+        PAPER_A5, PAPER_B5, PAPER_ENV_COM10, PAPER_ENV_DL, PAPER_ENV_C5
+    };
+    for (size_t i = 0; i < sizeof(codes)/sizeof(codes[0]); i++) {
+        const capt_paper_info_t *info = capt_get_paper_info_by_code(codes[i]);
+        assert(info != NULL);
+        assert(info->code == codes[i]);
+        assert(info->width_600 > 0);
+        assert(info->height_600 > 0);
+        assert(info->line_size_600 > 0);
+        assert(info->lines_600 > 0);
+        assert(info->line_size_600 * 8 >= info->width_600 - 2 * info->margin_l_600);
+    }
+
+    // Test name lookups
+    assert(capt_get_paper_info_by_name("iso_a4_210x297mm")->code == PAPER_A4);
+    assert(capt_get_paper_info_by_name("na_letter_8.5x11in")->code == PAPER_LETTER);
+    assert(capt_get_paper_info_by_name("na_legal_8.5x14in")->code == PAPER_LEGAL);
+    assert(capt_get_paper_info_by_name("na_executive_7.25x10.5in")->code == PAPER_EXEC);
+    assert(capt_get_paper_info_by_name("iso_a5_148x210mm")->code == PAPER_A5);
+    assert(capt_get_paper_info_by_name("jis_b5_182x257mm")->code == PAPER_B5);
+    assert(capt_get_paper_info_by_name("na_number-10_4.125x9.5in")->code == PAPER_ENV_COM10);
+    assert(capt_get_paper_info_by_name("iso_dl_110x220mm")->code == PAPER_ENV_DL);
+    assert(capt_get_paper_info_by_name("iso_c5_162x229mm")->code == PAPER_ENV_C5);
+
+    // Test dimension matching
+    assert(capt_get_paper_info_by_dims(4960, 7014, 600)->code == PAPER_A4);
+    assert(capt_get_paper_info_by_dims(5100, 6600, 600)->code == PAPER_LETTER);
+    assert(capt_get_paper_info_by_dims(5100, 8400, 600)->code == PAPER_LEGAL);
+    assert(capt_get_paper_info_by_dims(2475, 5700, 600)->code == PAPER_ENV_COM10);
+    // At 300 DPI
+    assert(capt_get_paper_info_by_dims(2480, 3507, 300)->code == PAPER_A4);
+    assert(capt_get_paper_info_by_dims(2550, 3300, 300)->code == PAPER_LETTER);
+}
+
+void test_page_params_building() {
+    printf("Testing page params building...\n");
+
+    capt_page_params_t p600;
+    // 600 DPI, auto cassette (0x01), toner saving off, smoothing on
+    capt_build_page_params(&p600, PAPER_LEGAL, 600, 0x01, 0x00, 0x02);
+    assert(p600.target_model == CAPT_MODEL_LBP810);
+    assert(p600.paper_size == PAPER_LEGAL);
+    assert(p600.resolution == 0x11);
+    assert(p600.input_slot == 0x01);
+    assert(p600.media_source == 0x01);
+    assert(p600.toner_saving == 0x00);
+    assert(p600.smoothing == 0x02);
+    assert(p600.paper_width == 5100);
+    assert(p600.paper_height == 8400);
+    assert(p600.image_line_size == 610);
+    assert(p600.image_lines == 8160);
+
+    // 300 DPI, manual slot (0x00), toner saving on (draft)
+    capt_page_params_t p300;
+    capt_build_page_params(&p300, PAPER_A4, 300, 0x00, 0x01, 0x00);
+    assert(p300.paper_size == PAPER_A4);
+    assert(p300.resolution == 0x00); // 300 DPI code
+    assert(p300.input_slot == 0x00); // Manual slot
+    assert(p300.media_source == 0x00);
+    assert(p300.toner_saving == 0x01);
+    assert(p300.smoothing == 0x00);
+    assert(p300.paper_width == 2480);
+    assert(p300.paper_height == 3507);
+    assert(p300.image_line_size == 296);
+    assert(p300.image_lines == 3388);
+}
+
+void test_engine_status_reasons() {
+    printf("Testing engine status mappings...\n");
+
+    // Door open (0x4000)
+    uint8_t raw_door[16] = {0};
+    raw_door[6] = 0x00; raw_door[7] = 0x40; // Engine: 0x4000
+    capt_status_t st_door;
+    capt_parse_status(raw_door, 16, &st_door);
+    assert(!st_door.cover_closed);
+    assert(strcmp(st_door.error_string, "Cover Open") == 0);
+
+    // Out of paper (0x0200)
+    uint8_t raw_paper[16] = {0};
+    raw_paper[6] = 0x00; raw_paper[7] = 0x02; // Engine: 0x0200
+    capt_status_t st_paper;
+    capt_parse_status(raw_paper, 16, &st_paper);
+    assert(!st_paper.paper_available);
+    assert(strstr(st_paper.error_string, "Out of Paper") != NULL);
+
+    // Cartridge missing (0x2000)
+    uint8_t raw_cart[16] = {0};
+    raw_cart[6] = 0x00; raw_cart[7] = 0x20; // Engine: 0x2000
+    capt_status_t st_cart;
+    capt_parse_status(raw_cart, 16, &st_cart);
+    assert(!st_cart.cartridge_present);
+    assert(strcmp(st_cart.error_string, "No Toner Cartridge") == 0);
+
+    // Paper jam (0x0100)
+    uint8_t raw_jam[16] = {0};
+    raw_jam[6] = 0x00; raw_jam[7] = 0x01; // Engine: 0x0100
+    capt_status_t st_jam;
+    capt_parse_status(raw_jam, 16, &st_jam);
+    assert(strcmp(st_jam.error_string, "Paper Jam") == 0);
+}
+
 int main() {
     test_packet_encoding();
     test_page_header_construction();
     test_status_parsing();
     test_go_online_magic();
     test_bcd_decode();
+    test_extended_paper_sizes();
+    test_page_params_building();
+    test_engine_status_reasons();
     
-    printf("All tests passed!\n");
+    printf("All test_capt tests passed!\n");
     return 0;
 }

@@ -110,6 +110,7 @@ static void test_dither() {
     memset(in_white, 255, 16);
     uint8_t out[2];
     
+    // Floyd-Steinberg
     dither_line(&ctx, in_white, out);
     assert(out[0] == 0 && out[1] == 0); // No dots for white
     
@@ -118,6 +119,7 @@ static void test_dither() {
     dither_line(&ctx, in_black, out);
     assert(out[0] == 0xFF && out[1] == 0xFF); // All dots for black
     
+    // Threshold
     uint8_t in_gray[16];
     memset(in_gray, 128, 16);
     threshold_line(in_gray, out, 16, 127);
@@ -125,14 +127,47 @@ static void test_dither() {
     
     threshold_line(in_gray, out, 16, 128);
     assert(out[0] == 0x00 && out[1] == 0x00);
+
+    // Adaptive halftoning (Roadmap 4.1)
+    // Pure white with ink=0 must NOT accumulate or diffuse error
+    dither_line_adaptive(&ctx, in_white, out);
+    assert(out[0] == 0 && out[1] == 0);
+    for (int i = 0; i < width + 4; i++) {
+        assert(ctx.error_cur[i] == 0);
+    }
+
+    // Pure black must produce all 1s without residual error
+    dither_line_adaptive(&ctx, in_black, out);
+    assert(out[0] == 0xFF && out[1] == 0xFF);
+    for (int i = 0; i < width + 4; i++) {
+        assert(ctx.error_cur[i] == 0);
+    }
+
+    // Atkinson Dithering (Roadmap 4.2)
+    dither_line_atkinson(&ctx, in_white, out);
+    assert(out[0] == 0 && out[1] == 0);
+    dither_line_atkinson(&ctx, in_black, out);
+    assert(out[0] == 0xFF && out[1] == 0xFF);
+
+    // Bayer 8x8 Ordered Dithering (Roadmap 4.2)
+    dither_line_bayer8x8(in_white, out, width, 0);
+    assert(out[0] == 0 && out[1] == 0);
+    dither_line_bayer8x8(in_black, out, width, 0);
+    assert(out[0] == 0xFF && out[1] == 0xFF);
+
+    // Dither render dispatch
+    dither_render_line(&ctx, in_white, out, 0, DITHER_ADAPTIVE);
+    assert(out[0] == 0 && out[1] == 0);
+    dither_render_line(&ctx, in_black, out, 0, DITHER_BAYER_8X8);
+    assert(out[0] == 0xFF && out[1] == 0xFF);
     
     dither_free(&ctx);
-    printf("Dither tests passed.\\n");
+    printf("Dither multi-algorithm tests passed.\n");
 }
 
 int main() {
     test_pwg();
     test_dither();
-    printf("All tests passed!\\n");
+    printf("All test_pwg_dither tests passed!\n");
     return 0;
 }

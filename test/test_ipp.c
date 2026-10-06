@@ -13,6 +13,12 @@
 static volatile bool g_stop_flag = false;
 static int g_print_job_count = 0;
 static size_t g_last_pwg_len = 0;
+static bool   g_cancel_called = false;
+static ipp_printer_state_info_t g_mock_status = {
+    .printer_state = 3,
+    .state_reasons = "none",
+    .is_accepting_jobs = true
+};
 
 static void on_print(const uint8_t *pwg_data, size_t pwg_len, void *user_data) {
     (void)user_data;
@@ -20,14 +26,26 @@ static void on_print(const uint8_t *pwg_data, size_t pwg_len, void *user_data) {
     g_last_pwg_len = pwg_len;
 }
 
+static void on_cancel(void *user_data) {
+    (void)user_data;
+    g_cancel_called = true;
+}
+
+static void get_status(ipp_printer_state_info_t *info, void *user_data) {
+    (void)user_data;
+    *info = g_mock_status;
+}
+
 static void *server_thread(void *arg) {
     (void)arg;
     ipp_server_config_t config = {
-        .listen_port = 6310, // Test port
+        .listen_port  = 6310, // Test port
         .printer_name = "Canon LBP-810 Test",
-        .on_print = on_print,
-        .user_data = NULL,
-        .stop_flag = &g_stop_flag
+        .on_print     = on_print,
+        .on_cancel    = on_cancel,
+        .get_status   = get_status,
+        .user_data    = NULL,
+        .stop_flag    = &g_stop_flag
     };
     ipp_server_run(&config);
     return NULL;
@@ -59,6 +77,15 @@ static socket_t connect_server(void) {
     return INVALID_SOCK;
 }
 
+static bool contains_bytes(const char *buf, size_t buf_len, const char *pattern) {
+    size_t pat_len = strlen(pattern);
+    if (pat_len > buf_len) return false;
+    for (size_t i = 0; i <= buf_len - pat_len; i++) {
+        if (memcmp(buf + i, pattern, pat_len) == 0) return true;
+    }
+    return false;
+}
+
 static void test_get_printer_attributes(void) {
     socket_t sock = connect_server();
     assert(sock != INVALID_SOCK);
@@ -81,8 +108,13 @@ static void test_get_printer_attributes(void) {
     send(sock, http_req, (int)strlen(http_req), 0);
     send(sock, (const char*)ipp_req, (int)sizeof(ipp_req), 0);
 
-    char resp[8192];
-    int len = recv(sock, resp, sizeof(resp) - 1, 0);
+    char resp[16384];
+    int len = 0;
+    while (len < (int)sizeof(resp) - 1) {
+        int r = recv(sock, resp + len, (int)sizeof(resp) - 1 - len, 0);
+        if (r <= 0) break;
+        len += r;
+    }
     assert(len > 0);
     resp[len] = '\0';
 
@@ -90,8 +122,110 @@ static void test_get_printer_attributes(void) {
     assert(strstr(resp, "HTTP/1.1 200 OK") != NULL);
     assert(strstr(resp, "application/ipp") != NULL);
 
+    // Verify extended media formats are advertised (Roadmap 2.1)
+    assert(contains_bytes(resp, len, "iso_a4_210x297mm"));
+    assert(contains_bytes(resp, len, "na_letter_8.5x11in"));
+    assert(contains_bytes(resp, len, "na_legal_8.5x14in"));
+    assert(contains_bytes(resp, len, "na_executive_7.25x10.5in"));
+    assert(contains_bytes(resp, len, "iso_a5_148x210mm"));
+    assert(contains_bytes(resp, len, "jis_b5_182x257mm"));
+    assert(contains_bytes(resp, len, "na_number-10_4.125x9.5in"));
+    assert(contains_bytes(resp, len, "iso_dl_110x220mm"));
+    assert(contains_bytes(resp, len, "iso_c5_162x229mm"));
+
+    // Verify media source and quality (Roadmap 2.2 & 2.3)
+    assert(contains_bytes(resp, len, "media-source-supported"));
+    assert(contains_bytes(resp, len, "print-quality-supported"));
+
     close_socket(sock);
     printf("Test Get-Printer-Attributes passed.\n");
+}
+
+static void test_dynamic_status(void) {
+    g_mock_status.printer_state = 5; // stopped
+    g_mock_status.state_reasons = "door-open-error";
+    g_mock_status.is_accepting_jobs = false;
+
+    socket_t sock = connect_server();
+    assert(sock != INVALID_SOCK);
+
+    uint8_t ipp_req[] = {
+        0x02, 0x00,
+        0x00, 0x0B, // Get-Printer-Attributes
+        0x00, 0x00, 0x00, 0x06,
+        0x01,
+        0x47, 0x00, 0x12, 'a', 't', 't', 'r', 'i', 'b', 'u', 't', 'e', 's', '-', 'c', 'h', 'a', 'r', 's', 'e', 't', 0x00, 0x05, 'u', 't', 'f', '-', '8',
+        0x03
+    };
+
+    char http_req[1024];
+    snprintf(http_req, sizeof(http_req),
+             "POST /printers/canon-lbp810 HTTP/1.1\r\n"
+             "Content-Length: %zu\r\n\r\n", sizeof(ipp_req));
+
+    send(sock, http_req, (int)strlen(http_req), 0);
+    send(sock, (const char*)ipp_req, (int)sizeof(ipp_req), 0);
+
+    char resp[16384];
+    int len = 0;
+    while (len < (int)sizeof(resp) - 1) {
+        int r = recv(sock, resp + len, (int)sizeof(resp) - 1 - len, 0);
+        if (r <= 0) break;
+        len += r;
+    }
+    assert(len > 0);
+    resp[len] = '\0';
+    close_socket(sock);
+
+    assert(contains_bytes(resp, len, "door-open-error"));
+
+    // Reset status back to idle
+    g_mock_status.printer_state = 3;
+    g_mock_status.state_reasons = "none";
+    g_mock_status.is_accepting_jobs = true;
+
+    printf("Test dynamic status reporting passed.\n");
+}
+
+static void test_cancel_job(void) {
+    socket_t sock = connect_server();
+    assert(sock != INVALID_SOCK);
+
+    g_cancel_called = false;
+
+    uint8_t ipp_req[] = {
+        0x02, 0x00,
+        0x00, 0x08, // Cancel-Job
+        0x00, 0x00, 0x00, 0x07,
+        0x01,
+        0x47, 0x00, 0x12, 'a', 't', 't', 'r', 'i', 'b', 'u', 't', 'e', 's', '-', 'c', 'h', 'a', 'r', 's', 'e', 't', 0x00, 0x05, 'u', 't', 'f', '-', '8',
+        0x03
+    };
+
+    char http_req[1024];
+    snprintf(http_req, sizeof(http_req),
+             "POST /printers/canon-lbp810 HTTP/1.1\r\n"
+             "Content-Length: %zu\r\n\r\n", sizeof(ipp_req));
+
+    send(sock, http_req, (int)strlen(http_req), 0);
+    send(sock, (const char*)ipp_req, (int)sizeof(ipp_req), 0);
+
+    char resp[4096];
+    int len = 0;
+    while (len < (int)sizeof(resp) - 1) {
+        int r = recv(sock, resp + len, (int)sizeof(resp) - 1 - len, 0);
+        if (r <= 0) break;
+        len += r;
+    }
+    assert(len > 0);
+    resp[len] = '\0';
+    close_socket(sock);
+
+    assert(strstr(resp, "HTTP/1.1 200 OK") != NULL);
+    assert(contains_bytes(resp, len, "job-canceled-by-user"));
+    assert(g_cancel_called == true);
+
+    printf("Test Cancel-Job passed.\n");
 }
 
 static void test_print_job(void) {
@@ -187,6 +321,8 @@ int main(void) {
 #endif
 
     test_get_printer_attributes();
+    test_dynamic_status();
+    test_cancel_job();
     test_print_job();
     test_chunked_transfer();
 

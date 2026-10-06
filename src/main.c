@@ -27,63 +27,121 @@ static SERVICE_STATUS_HANDLE g_svc_handle = NULL;
 static SERVICE_STATUS        g_svc_status;
 #endif
 
+static volatile bool g_job_cancelled = false;
+static volatile bool g_is_printing    = false;
+
 /* ── Build CAPT page params from PWG header ── */
 static void build_page_params(capt_page_params_t *params,
                               const pwg_page_header_t *hdr)
 {
-    memset(params, 0, sizeof(*params));
-    params->target_model = CAPT_MODEL_LBP810; /* 0x01A4 */
-    params->media_source = 0x01;
-    params->input_slot   = 0x01; /* 0x01 = Main Tray / Auto Cassette (0x00 is Manual Feed) */
-    memset(params->toner_density, 0x1F, 4); /* Maximum density */
-    params->mode         = 0x00;
-    params->resolution   = (hdr->hw_resolution_x >= 600) ? 0x11 : 0x00;
-    params->constants[0] = 0x03;
-    params->constants[1] = 0x01;
-    params->constants[2] = 0x01;
-    params->constants[3] = 0x01;
-    params->smoothing    = 0x02; /* ON */
-    params->toner_saving = 0x00; /* OFF */
-
     uint32_t dpi = hdr->hw_resolution_x ? hdr->hw_resolution_x : 600;
-    bool is_letter = (hdr->width > 5000) || (dpi < 600 && hdr->width > 2500) ||
-                     (strstr(hdr->page_size_name, "letter") != NULL);
 
-    if (is_letter) {
-        params->paper_size = PAPER_LETTER; /* 0x0D */
-        if (dpi >= 600) {
-            params->paper_width     = 5100;
-            params->paper_height    = 6600;
-            params->margin_left     = 110;
-            params->margin_top      = 120;
-            params->image_line_size = 610;  /* 4880 pixels = (5100 - 2*110) */
-            params->image_lines     = 6360;  /* 6600 - 2*120 */
-        } else {
-            params->paper_width     = 2550;
-            params->paper_height    = 3300;
-            params->margin_left     = 55;
-            params->margin_top      = 60;
-            params->image_line_size = 305;
-            params->image_lines     = 3180;
-        }
+    /* Extended paper format lookup (Roadmap 2.1) */
+    const capt_paper_info_t *paper = capt_get_paper_info_by_name(hdr->page_size_name);
+    if (!paper) {
+        paper = capt_get_paper_info_by_dims(hdr->width, hdr->height, dpi);
+    }
+    if (!paper) {
+        paper = capt_get_paper_info_by_code(PAPER_A4);
+    }
+
+    /* Input Slot selection (Roadmap 2.2) */
+    uint8_t input_slot = 0x01; // Default: Main auto cassette
+    if (hdr->manual_feed != 0 || hdr->media_position == 0 ||
+        paper->code == PAPER_ENV_COM10 || paper->code == PAPER_ENV_DL || paper->code == PAPER_ENV_C5) {
+        input_slot = 0x00; // Manual Feed Slot
+        LOG_INFO("Selected manual feed slot (input_slot=0x00) for paper '%s'", paper->name);
     } else {
-        params->paper_size = PAPER_A4; /* 0x02 */
-        if (dpi >= 600) {
-            params->paper_width     = 4960;
-            params->paper_height    = 7014;
-            params->margin_left     = 112;
-            params->margin_top      = 119;
-            params->image_line_size = 592;  /* (4960 - 2*112) / 8 */
-            params->image_lines     = 6776;  /* 7014 - 2*119 */
-        } else {
-            params->paper_width     = 2480;
-            params->paper_height    = 3507;
-            params->margin_left     = 56;
-            params->margin_top      = 60;
-            params->image_line_size = 296;
-            params->image_lines     = 3388;
+        LOG_INFO("Selected main cassette (input_slot=0x01) for paper '%s'", paper->name);
+    }
+
+    /* Print quality & Toner saving (Roadmap 2.3) */
+    uint8_t toner_saving = 0x00;
+    uint8_t smoothing = 0x02; // ON by default
+    if (strstr(hdr->rendering_intent, "draft") != NULL ||
+        hdr->pwg_integer[0] == 3 /* draft quality */) {
+        toner_saving = 0x01;
+        smoothing = 0x00;
+        LOG_INFO("Draft / Toner saving mode activated");
+    }
+
+    capt_build_page_params(params, paper->code, dpi, input_slot, toner_saving, smoothing);
+    LOG_INFO("Built page params: %s (%ux%u px, linesize=%u, lines=%u, %u DPI, slot=0x%02X, toner_save=0x%02X)",
+             paper->name, params->paper_width, params->paper_height,
+             params->image_line_size, params->image_lines, dpi,
+             params->input_slot, params->toner_saving);
+}
+
+/* ── Cancel callback: called from IPP thread when Cancel-Job received ── */
+static void on_cancel_job(void *user_data)
+{
+    (void)user_data;
+    LOG_WARN("Cancel-Job request received from spooler");
+    g_job_cancelled = true;
+}
+
+/* ── Status callback: called when IPP client queries printer attributes ── */
+static void get_ipp_status(ipp_printer_state_info_t *info, void *user_data)
+{
+    (void)user_data;
+    if (g_is_printing) {
+        info->printer_state = 4; // processing
+        info->state_reasons = "none";
+        info->is_accepting_jobs = true;
+        return;
+    }
+
+    if (!g_capt_connected) {
+        if (capt_open(&g_capt_dev) == 0) {
+            g_capt_connected = true;
+            g_capt_dev.cancel_flag = &g_job_cancelled;
         }
     }
+
+    if (g_capt_connected) {
+        capt_status_t st;
+        uint8_t raw[256];
+        uint16_t actual = 0;
+        if (usb_send_packet(&g_capt_dev.usb, CAPT_GET_EXTENDED_STATUS, NULL, 0) == 0 &&
+            usb_recv_packet(&g_capt_dev.usb, CAPT_GET_EXTENDED_STATUS, raw, sizeof(raw), &actual) == 0 &&
+            actual >= 16) {
+            capt_parse_status(raw, actual, &st);
+            if (!st.cover_closed) {
+                info->printer_state = 5; // stopped
+                info->state_reasons = "door-open-error";
+                info->is_accepting_jobs = false;
+            } else if (!st.cartridge_present) {
+                info->printer_state = 5; // stopped
+                info->state_reasons = "marker-supply-missing-error";
+                info->is_accepting_jobs = false;
+            } else if (!st.paper_available) {
+                info->printer_state = 5; // stopped
+                info->state_reasons = "media-empty-error";
+                info->is_accepting_jobs = false;
+            } else if (st.engine & 0x0100) {
+                info->printer_state = 5; // stopped
+                info->state_reasons = "media-jam-error";
+                info->is_accepting_jobs = false;
+            } else if (st.error) {
+                info->printer_state = 5; // stopped
+                info->state_reasons = "other";
+                info->is_accepting_jobs = false;
+            } else {
+                info->printer_state = 3; // idle
+                info->state_reasons = "none";
+                info->is_accepting_jobs = true;
+            }
+            return;
+        } else {
+            /* USB error -> mark disconnected so next attempt re-probes */
+            capt_close(&g_capt_dev);
+            g_capt_connected = false;
+        }
+    }
+
+    info->printer_state = 3; // idle
+    info->state_reasons = "none";
+    info->is_accepting_jobs = true;
 }
 
 /* ── Print callback: receives PWG-Raster from IPP, drives CAPT ── */
@@ -92,25 +150,41 @@ static void on_print_job(const uint8_t *pwg_data, size_t pwg_len, void *user_dat
     (void)user_data;
     LOG_INFO("Received print job: %zu bytes of PWG-Raster data", pwg_len);
 
-    /* Open CAPT device if not already connected */
+    g_job_cancelled = false;
+    g_is_printing = true;
+
+    /* Open CAPT device if not already connected (with reconnect retries) */
     if (!g_capt_connected) {
-        if (capt_open(&g_capt_dev) != 0) {
+        int retries = 3;
+        while (retries-- > 0 && !g_capt_connected) {
+            if (capt_open(&g_capt_dev) == 0) {
+                g_capt_connected = true;
+                break;
+            }
+            platform_sleep_ms(500);
+        }
+        if (!g_capt_connected) {
             LOG_ERROR("Cannot open Canon LBP-810 USB device");
+            g_is_printing = false;
             return;
         }
-        g_capt_connected = true;
     }
+    g_capt_dev.cancel_flag = &g_job_cancelled;
 
     /* Parse PWG-Raster stream */
     pwg_stream_t stream;
     if (pwg_open(&stream, pwg_data, pwg_len) != 0) {
         LOG_ERROR("Invalid PWG-Raster data (bad magic)");
+        g_is_printing = false;
         return;
     }
 
     /* Begin print job */
     if (capt_job_begin(&g_capt_dev) != 0) {
         LOG_ERROR("Failed to begin CAPT print job");
+        capt_close(&g_capt_dev);
+        g_capt_connected = false;
+        g_is_printing = false;
         return;
     }
 
@@ -118,6 +192,11 @@ static void on_print_job(const uint8_t *pwg_data, size_t pwg_len, void *user_dat
     pwg_page_header_t hdr;
 
     while (pwg_read_page_header(&stream, &hdr) == 0) {
+        if (g_job_cancelled) {
+            LOG_WARN("Job cancelled before page %d header processed", page_num + 1);
+            break;
+        }
+
         page_num++;
         LOG_INFO("Processing page %d: %ux%u pixels, %u DPI, %u bpp",
                  page_num, hdr.width, hdr.height, hdr.hw_resolution_x, hdr.bits_per_pixel);
@@ -142,7 +221,7 @@ static void on_print_job(const uint8_t *pwg_data, size_t pwg_len, void *user_dat
             break;
         }
 
-        /* Initialize Floyd-Steinberg dithering */
+        /* Initialize dithering */
         uint32_t pixel_width = mono_line_bytes * 8;
         if (pixel_width > hdr.width)
             pixel_width = hdr.width;
@@ -160,9 +239,14 @@ static void on_print_job(const uint8_t *pwg_data, size_t pwg_len, void *user_dat
             top_offset = params.margin_top;
         }
 
-        /* Decode each PWG scanline (with line repetitions) and dither to 1bpp */
+        /* Decode each PWG scanline and apply adaptive text-preserving halftoning */
         uint32_t y = 0;
         while (y < hdr.height && stream.offset < stream.data_len) {
+            if (g_job_cancelled) {
+                LOG_WARN("Job cancelled during raster decode at line %u", y);
+                break;
+            }
+
             uint32_t line_repeat = 0;
             if (pwg_read_line(&stream, &hdr, gray_line_buf, &line_repeat) != 0) {
                 LOG_WARN("PWG-Raster decode error at line %u", y);
@@ -179,7 +263,7 @@ static void on_print_job(const uint8_t *pwg_data, size_t pwg_len, void *user_dat
                             mono_row[b] = invert ? ~byte : byte;
                         }
                     } else {
-                        dither_line(&dither, gray_line_buf + left_offset, mono_row);
+                        dither_line_adaptive(&dither, gray_line_buf + left_offset, mono_row);
                     }
                 }
             }
@@ -189,6 +273,11 @@ static void on_print_job(const uint8_t *pwg_data, size_t pwg_len, void *user_dat
 
         free(gray_line_buf);
         dither_free(&dither);
+
+        if (g_job_cancelled) {
+            free(mono_bitmap);
+            break;
+        }
 
         /* Send page to printer via CAPT */
         LOG_INFO("Sending page %d to printer (%u x %u, %u DPI)...",
@@ -200,17 +289,29 @@ static void on_print_job(const uint8_t *pwg_data, size_t pwg_len, void *user_dat
                                  params.image_lines);
         free(mono_bitmap);
 
-        if (rc != 0) {
+        if (rc == -4) {
+            LOG_WARN("Page %d printing cancelled by user", page_num);
+            break;
+        } else if (rc != 0) {
             LOG_ERROR("Failed to print page %d: error %d", page_num, rc);
+            /* Reset USB on communication failure */
+            capt_close(&g_capt_dev);
+            g_capt_connected = false;
             break;
         }
 
         LOG_INFO("Page %d printed successfully", page_num);
     }
 
-    /* End print job */
-    capt_job_end(&g_capt_dev);
-    LOG_INFO("Print job complete: %d page(s)", page_num);
+    /* End or cancel print job */
+    if (g_job_cancelled) {
+        LOG_WARN("Executing CAPT cancel and buffer purge...");
+        capt_cancel_job(&g_capt_dev);
+    } else {
+        capt_job_end(&g_capt_dev);
+    }
+    LOG_INFO("Print job finished: %d page(s)", page_num);
+    g_is_printing = false;
 }
 
 /* ── Server main loop ─────────────────────────────────── */
@@ -219,6 +320,7 @@ static int run_server(void)
     /* Try to open the CAPT device at startup */
     if (capt_open(&g_capt_dev) == 0) {
         g_capt_connected = true;
+        g_capt_dev.cancel_flag = &g_job_cancelled;
         LOG_INFO("Canon LBP-810 found and connected via USB");
     } else {
         LOG_WARN("Canon LBP-810 not found — will retry when print job arrives");
@@ -228,6 +330,8 @@ static int run_server(void)
         .listen_port  = g_port,
         .printer_name = "Canon LBP-810",
         .on_print     = on_print_job,
+        .on_cancel    = on_cancel_job,
+        .get_status   = get_ipp_status,
         .user_data    = NULL,
         .stop_flag    = &g_stop
     };
