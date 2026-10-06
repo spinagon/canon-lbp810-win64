@@ -7,6 +7,8 @@
 #ifdef _WIN32
 #define strncasecmp _strnicmp
 #define strcasecmp  _stricmp
+#include <BaseTsd.h>
+#define ssize_t SSIZE_T
 #endif
 
 #define IPP_OP_PRINT_JOB               0x0002

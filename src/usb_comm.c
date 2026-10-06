@@ -7,6 +7,7 @@
 #ifdef _WIN32
 #include <initguid.h>
 #include <setupapi.h>
+#define strcasecmp _stricmp
 
 /* GUID from our INF file */
 DEFINE_GUID(GUID_DEVINTERFACE_LBP810,
