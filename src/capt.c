@@ -26,13 +26,8 @@ static int get_extended_status(capt_printer_t *p, capt_status_t *status) {
     uint16_t actual = 0;
     uint8_t buf[256];
     if (usb_recv_packet(&p->usb, CAPT_GET_EXTENDED_STATUS, buf, sizeof(buf), &actual) != 0) return -1;
+    if (actual < 16) return -1;
     capt_parse_status(buf, actual, status);
-    if (actual >= 16) {
-        LOG_DEBUG("Extended status [%uB]: %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X (state: %s)",
-                  actual, buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7],
-                  buf[8], buf[9], buf[10], buf[11], buf[12], buf[13], buf[14], buf[15],
-                  status->error_string);
-    }
     return 0;
 }
 
@@ -270,6 +265,7 @@ int capt_job_begin(capt_printer_t *printer) {
 }
 
 int capt_job_end(capt_printer_t *printer) {
+    if (!printer || !printer->usb.connected) return 0;
     LOG_INFO("Ending CAPT print job...");
     uint8_t buf[4];
     uint16_t actual = 0;
@@ -283,7 +279,7 @@ int capt_job_end(capt_printer_t *printer) {
 }
 
 int capt_cancel_job(capt_printer_t *printer) {
-    if (!printer) return -1;
+    if (!printer || !printer->usb.connected) return 0;
     LOG_WARN("Executing CAPT job cancellation and engine buffer purge (0xE0A4)...");
     uint8_t buf[16];
     uint16_t actual = 0;
@@ -366,7 +362,8 @@ int capt_print_page(capt_printer_t *printer, const capt_page_params_t *params,
     pdata[0] = 0x00; pdata[1] = 0x00;
     pdata[2] = params->target_model & 0xFF; pdata[3] = (params->target_model >> 8) & 0xFF;
     pdata[4] = params->paper_size; pdata[5] = params->media_source;
-    pdata[6] = params->input_slot; pdata[7] = 0x00;
+    pdata[6] = 0x00; /* LBP-810 physical cassette slot index is always 0x00 */
+    pdata[7] = 0x00;
     memcpy(&pdata[8], params->toner_density, 4);
     pdata[12] = params->mode; pdata[13] = params->resolution;
     memcpy(&pdata[14], params->constants, 4);
@@ -434,11 +431,15 @@ int capt_print_page(capt_printer_t *printer, const capt_page_params_t *params,
 
     /* Phase 5: End page */
     usb_send_packet(&printer->usb, CAPT_END_PAGE, NULL, 0);
-    LOG_INFO("Page %u raster sent, waiting for printer engine to deliver...", page_num);
+    uint8_t post_basic = 0;
+    get_basic_status(printer, &post_basic);
+    LOG_INFO("Page %u raster sent (basic=0x%02X), waiting for printer engine to deliver...",
+             page_num, post_basic);
     
     /* Phase 6: Wait for page delivery (up to 60 seconds) */
     int timeout = 60000;
     int elapsed = 0;
+    int last_log_elapsed = 0;
     capt_status_t status;
     bool delivered = false;
 
@@ -458,12 +459,15 @@ int capt_print_page(capt_printer_t *printer, const capt_page_params_t *params,
             return -4;
         }
         if (get_extended_status(printer, &status) == 0) {
-            LOG_DEBUG("Delivery status (t=%ds): printed=%u (start=%u), start_cnt=%u, printing=%u, shipped=%u, engine=0x%04X, basic=0x%02X, aux=0x%02X",
-                      elapsed / 1000, status.page_printed, start_printed,
-                      status.page_start, status.page_printing, status.page_shipped,
-                      status.engine, status.basic, status.aux);
+            if (elapsed - last_log_elapsed >= 3000) {
+                LOG_INFO("Delivery status (t=%ds): printed=%u (start=%u), start_cnt=%u, printing=%u, shipped=%u, engine=0x%04X, basic=0x%02X, aux=0x%02X",
+                         elapsed / 1000, status.page_printed, start_printed,
+                         status.page_start, status.page_printing, status.page_shipped,
+                         status.engine, status.basic, status.aux);
+                last_log_elapsed = elapsed;
+            }
 
-            if (status.page_printed > start_printed) {
+            if (status.page_printed > start_printed || status.page_shipped > start_printed) {
                 LOG_INFO("Page %u printed and ejected successfully (counter %u -> %u)",
                          page_num, start_printed, status.page_printed);
                 delivered = true;
@@ -474,10 +478,10 @@ int capt_print_page(capt_printer_t *printer, const capt_page_params_t *params,
                           status.error_string, status.engine, status.basic);
                 break;
             }
-            /* If 12 seconds have elapsed and the engine is idle and ready */
-            if (elapsed >= 12000 && (status.basic & 0x02) == 0 && (status.aux & 0x06) == 0) {
-                LOG_INFO("Printer engine cycle completed (aux=0x%02X, basic=0x%02X)",
-                         status.aux, status.basic);
+            /* Engine completion fallback: if at least 10 seconds have elapsed and the engine is idle, ready, and has no error */
+            if (elapsed >= 10000 && status.ready && !status.error && !status.buffer_full) {
+                LOG_INFO("Printer engine cycle completed (engine=0x%04X, basic=0x%02X)",
+                         status.engine, status.basic);
                 delivered = true;
                 break;
             }
@@ -491,6 +495,6 @@ int capt_print_page(capt_printer_t *printer, const capt_page_params_t *params,
     }
 
     printer->page_counter++;
-    return delivered ? 0 : -1;
+    return delivered ? 0 : -5;
 }
 

@@ -339,6 +339,10 @@ static void on_print_job(const uint8_t *pwg_data, size_t pwg_len, void *user_dat
             g_printer_state = 5;
             g_printer_state_reasons = "door-open-error";
             break;
+        } else if (rc == -5) {
+            LOG_WARN("Page %d delivery confirmation timed out (data transmitted successfully)", page_num);
+            /* Do not tear down USB device; allow capt_job_end to release the unit cleanly */
+            break;
         } else if (rc != 0) {
             LOG_ERROR("Failed to print page %d: communication error %d", page_num, rc);
             /* Reset USB only on hardware communication failure */

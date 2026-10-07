@@ -79,8 +79,8 @@ Offset  Size  Field                Description
 0x00    2     reserved             Always 0x0000
 0x02    2     target_model         Model identifier: 0x01A4 (Canon LBP-810)
 0x04    1     paper_size           Paper size opcode (see Table below)
-0x05    1     media_source         Media source: 0x01 (auto) or 0x00 (manual)
-0x06    1     input_slot           Input slot: 0x01 (cassette), 0x00 (manual)
+0x05    1     media_source         Media source: 0x01 (auto cassette) or 0x00 (manual slot)
+0x06    1     input_slot           Hardware cassette index (always 0x00 for LBP-810)
 0x07    1     reserved             Always 0x00
 0x08    4     toner_density        4 bytes toner density (0x1F, 0x1F, 0x1F, 0x1F max)
 0x0C    1     mode                 Engine operating mode: 0x00
