@@ -36,11 +36,116 @@ static int get_extended_status(capt_printer_t *p, capt_status_t *status) {
     return 0;
 }
 
+static const capt_paper_info_t s_paper_table[] = {
+    { PAPER_A4,        "A4",        "iso_a4_210x297mm",          4960, 7014, 112, 119, 592, 6776 },
+    { PAPER_LETTER,    "Letter",    "na_letter_8.5x11in",        5100, 6600, 110, 120, 610, 6360 },
+    { PAPER_LEGAL,     "Legal",     "na_legal_8.5x14in",         5100, 8400, 110, 120, 610, 8160 },
+    { PAPER_EXEC,      "Executive", "na_executive_7.25x10.5in",  4350, 6300, 100, 120, 520, 6060 },
+    { PAPER_A5,        "A5",        "iso_a5_148x210mm",          3496, 4960, 100, 110, 412, 4740 },
+    { PAPER_B5,        "B5",        "jis_b5_182x257mm",          4299, 6070, 100, 110, 513, 5850 },
+    { PAPER_ENV_COM10, "COM10",     "na_number-10_4.125x9.5in",  2475, 5700, 100, 120, 285, 5460 },
+    { PAPER_ENV_DL,    "DL",        "iso_dl_110x220mm",          2598, 5196, 100, 110, 300, 4976 },
+    { PAPER_ENV_C5,    "C5",        "iso_c5_162x229mm",          3826, 5409, 100, 110, 454, 5189 },
+};
+#define NUM_PAPERS (sizeof(s_paper_table) / sizeof(s_paper_table[0]))
+
+const capt_paper_info_t *capt_get_paper_info_by_code(uint8_t paper_code) {
+    for (size_t i = 0; i < NUM_PAPERS; i++) {
+        if (s_paper_table[i].code == paper_code) {
+            return &s_paper_table[i];
+        }
+    }
+    return NULL;
+}
+
+const capt_paper_info_t *capt_get_paper_info_by_name(const char *name) {
+    if (!name || !*name) return NULL;
+    for (size_t i = 0; i < NUM_PAPERS; i++) {
+        if (strstr(name, s_paper_table[i].ipp_name) != NULL ||
+            strstr(name, s_paper_table[i].name) != NULL) {
+            return &s_paper_table[i];
+        }
+    }
+    if (strstr(name, "a4") || strstr(name, "A4")) return capt_get_paper_info_by_code(PAPER_A4);
+    if (strstr(name, "letter") || strstr(name, "Letter")) return capt_get_paper_info_by_code(PAPER_LETTER);
+    if (strstr(name, "legal") || strstr(name, "Legal")) return capt_get_paper_info_by_code(PAPER_LEGAL);
+    if (strstr(name, "exec") || strstr(name, "Exec")) return capt_get_paper_info_by_code(PAPER_EXEC);
+    if (strstr(name, "a5") || strstr(name, "A5")) return capt_get_paper_info_by_code(PAPER_A5);
+    if (strstr(name, "b5") || strstr(name, "B5")) return capt_get_paper_info_by_code(PAPER_B5);
+    if (strstr(name, "com10") || strstr(name, "number-10") || strstr(name, "COM10")) return capt_get_paper_info_by_code(PAPER_ENV_COM10);
+    if (strstr(name, "dl") || strstr(name, "DL")) return capt_get_paper_info_by_code(PAPER_ENV_DL);
+    if (strstr(name, "c5") || strstr(name, "C5")) return capt_get_paper_info_by_code(PAPER_ENV_C5);
+    return NULL;
+}
+
+const capt_paper_info_t *capt_get_paper_info_by_dims(uint32_t width_px, uint32_t height_px, uint32_t dpi) {
+    uint32_t w600 = (dpi > 0 && dpi != 600) ? (width_px * 600 / dpi) : width_px;
+    uint32_t h600 = (dpi > 0 && dpi != 600) ? (height_px * 600 / dpi) : height_px;
+
+    const capt_paper_info_t *best = &s_paper_table[0]; // A4 default
+    uint32_t min_diff = UINT32_MAX;
+
+    for (size_t i = 0; i < NUM_PAPERS; i++) {
+        uint32_t dw = (w600 > s_paper_table[i].width_600) ? (w600 - s_paper_table[i].width_600) : (s_paper_table[i].width_600 - w600);
+        uint32_t dh = (h600 > s_paper_table[i].height_600) ? (h600 - s_paper_table[i].height_600) : (s_paper_table[i].height_600 - h600);
+        uint32_t diff = dw + dh;
+        if (diff < min_diff) {
+            min_diff = diff;
+            best = &s_paper_table[i];
+        }
+    }
+    return best;
+}
+
+int capt_build_page_params(capt_page_params_t *params, uint8_t paper_code, uint32_t dpi,
+                           uint8_t input_slot, uint8_t toner_saving, uint8_t smoothing)
+{
+    const capt_paper_info_t *info = capt_get_paper_info_by_code(paper_code);
+    if (!info) {
+        info = capt_get_paper_info_by_code(PAPER_A4);
+    }
+    memset(params, 0, sizeof(*params));
+    params->target_model = CAPT_MODEL_LBP810;
+    params->paper_size = info->code;
+    params->media_source = (input_slot == 0x00) ? 0x00 : 0x01;
+    params->input_slot = input_slot;
+    memset(params->toner_density, 0x1F, 4);
+    params->mode = 0x00;
+    params->resolution = (dpi >= 600) ? 0x11 : 0x00;
+    params->constants[0] = 0x03;
+    params->constants[1] = 0x01;
+    params->constants[2] = 0x01;
+    params->constants[3] = 0x01;
+    params->smoothing = smoothing;
+    params->toner_saving = toner_saving;
+
+    if (dpi >= 600) {
+        params->paper_width     = info->width_600;
+        params->paper_height    = info->height_600;
+        params->margin_left     = info->margin_l_600;
+        params->margin_top      = info->margin_t_600;
+        params->image_line_size = info->line_size_600;
+        params->image_lines     = info->lines_600;
+    } else {
+        params->paper_width     = info->width_600 / 2;
+        params->paper_height    = info->height_600 / 2;
+        params->margin_left     = info->margin_l_600 / 2;
+        params->margin_top      = info->margin_t_600 / 2;
+        params->image_line_size = (info->line_size_600 + 1) / 2;
+        params->image_lines     = info->lines_600 / 2;
+    }
+    return 0;
+}
+
 static int wait_printer_ready(capt_printer_t *p, int timeout_ms) {
     int elapsed = 0;
     bool warned_paper = false;
     bool warned_cover = false;
     while (elapsed < timeout_ms) {
+        if (p->cancel_flag && *(p->cancel_flag)) {
+            LOG_WARN("Printer wait aborted: job cancelled");
+            return -4;
+        }
         capt_status_t status;
         if (get_extended_status(p, &status) == 0) {
             if (status.ready && !status.error && status.paper_available) {
@@ -79,6 +184,10 @@ static int wait_printer_ready(capt_printer_t *p, int timeout_ms) {
 static int wait_buffer_ready(capt_printer_t *p, int timeout_ms) {
     int elapsed = 0;
     while (elapsed < timeout_ms) {
+        if (p->cancel_flag && *(p->cancel_flag)) {
+            LOG_WARN("Buffer wait aborted: job cancelled");
+            return -4;
+        }
         uint8_t sb = 0;
         if (get_basic_status(p, &sb) != 0) return -1;
         if (sb & 0x80) {
@@ -173,12 +282,49 @@ int capt_job_end(capt_printer_t *printer) {
     return 0;
 }
 
+int capt_cancel_job(capt_printer_t *printer) {
+    if (!printer) return -1;
+    LOG_WARN("Executing CAPT job cancellation and engine buffer purge (0xE0A4)...");
+    uint8_t buf[16];
+    uint16_t actual = 0;
+
+    /* 1. Transmit CAPT_DISCARD_DATA (0xE0A4) to flush onboard FIFO buffer */
+    usb_send_packet(&printer->usb, CAPT_DISCARD_DATA, NULL, 0);
+    usb_recv_packet(&printer->usb, CAPT_DISCARD_DATA, buf, sizeof(buf), &actual);
+
+    /* 2. Clear errors and misprints */
+    usb_send_packet(&printer->usb, CAPT_CLEAR_ERROR, NULL, 0);
+    usb_recv_packet(&printer->usb, CAPT_CLEAR_ERROR, buf, sizeof(buf), &actual);
+    usb_send_packet(&printer->usb, CAPT_CLEAR_MISPRINT, NULL, 0);
+    usb_recv_packet(&printer->usb, CAPT_CLEAR_MISPRINT, buf, sizeof(buf), &actual);
+
+    /* 3. Reset print engine */
+    usb_send_packet(&printer->usb, CAPT_RESET_ENGINE, NULL, 0);
+    usb_recv_packet(&printer->usb, CAPT_RESET_ENGINE, buf, sizeof(buf), &actual);
+
+    /* 4. Release unit */
+    usb_send_packet(&printer->usb, CAPT_RELEASE_UNIT, NULL, 0);
+    usb_recv_packet(&printer->usb, CAPT_RELEASE_UNIT, buf, sizeof(buf), &actual);
+
+    printer->page_counter = 0;
+    LOG_INFO("CAPT job cancellation completed");
+    return 0;
+}
+
 int capt_print_page(capt_printer_t *printer, const capt_page_params_t *params,
                     const uint8_t *bitmap_1bpp, uint32_t width_bytes, uint32_t height_lines) {
     int rc;
 
+    if (printer->cancel_flag && *(printer->cancel_flag)) {
+        LOG_WARN("Print page aborted before start: job cancelled");
+        return -4;
+    }
+
     /* Check printer readiness before sending data */
     if (wait_printer_ready(printer, 5000) != 0) {
+        if (printer->cancel_flag && *(printer->cancel_flag)) {
+            return -4;
+        }
         capt_status_t st;
         get_extended_status(printer, &st);
         if (!st.paper_available) {
@@ -247,6 +393,12 @@ int capt_print_page(capt_printer_t *printer, const capt_page_params_t *params,
     scoa_init(&scoa, (int)width_bytes);
 
     for (uint32_t line = 0; line < height_lines; line++) {
+        if (printer->cancel_flag && *(printer->cancel_flag)) {
+            LOG_WARN("Job cancelled during SCoA streaming at line %u", line);
+            scoa_free(&scoa);
+            return -4;
+        }
+
         const uint8_t *cur = bitmap_1bpp + (line * width_bytes);
         const uint8_t *prev = (line > 0)
             ? bitmap_1bpp + ((line - 1) * width_bytes)
@@ -291,10 +443,20 @@ int capt_print_page(capt_printer_t *printer, const capt_page_params_t *params,
     bool delivered = false;
 
     /* Physical laser pickup and heating cycle takes at least 3-4 seconds */
-    SLEEP_MS(3000);
-    elapsed += 3000;
+    for (int i = 0; i < 30; i++) {
+        if (printer->cancel_flag && *(printer->cancel_flag)) {
+            LOG_WARN("Job cancelled while waiting for pickup cycle");
+            return -4;
+        }
+        SLEEP_MS(100);
+        elapsed += 100;
+    }
 
     do {
+        if (printer->cancel_flag && *(printer->cancel_flag)) {
+            LOG_WARN("Job cancelled while waiting for page delivery");
+            return -4;
+        }
         if (get_extended_status(printer, &status) == 0) {
             LOG_DEBUG("Delivery status (t=%ds): printed=%u (start=%u), start_cnt=%u, printing=%u, shipped=%u, engine=0x%04X, basic=0x%02X, aux=0x%02X",
                       elapsed / 1000, status.page_printed, start_printed,

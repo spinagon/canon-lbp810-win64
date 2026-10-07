@@ -40,6 +40,19 @@
   }
   static inline void platform_net_cleanup(void) { WSACleanup(); }
 
+  typedef CRITICAL_SECTION platform_mutex_t;
+  static inline void platform_mutex_init(platform_mutex_t *m) { InitializeCriticalSection(m); }
+  static inline void platform_mutex_destroy(platform_mutex_t *m) { DeleteCriticalSection(m); }
+  static inline void platform_mutex_lock(platform_mutex_t *m) { EnterCriticalSection(m); }
+  static inline void platform_mutex_unlock(platform_mutex_t *m) { LeaveCriticalSection(m); }
+
+  static inline int platform_thread_create(void *(*func)(void *), void *arg) {
+      HANDLE h = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)(void (*)(void))func, arg, 0, NULL);
+      if (!h) return -1;
+      CloseHandle(h);
+      return 0;
+  }
+
 #else
   /* ---- Linux / POSIX (for testing & cross-compilation) ---- */
   #include <unistd.h>
@@ -49,6 +62,7 @@
   #include <errno.h>
   #include <string.h>
   #include <time.h>
+  #include <pthread.h>
 
   /* Stub Windows types for compilation */
   typedef int            BOOL;
@@ -75,6 +89,20 @@
 
   static inline int  platform_net_init(void)    { return 0; }
   static inline void platform_net_cleanup(void) {}
+
+  typedef pthread_mutex_t platform_mutex_t;
+  static inline void platform_mutex_init(platform_mutex_t *m) { pthread_mutex_init(m, NULL); }
+  static inline void platform_mutex_destroy(platform_mutex_t *m) { pthread_mutex_destroy(m); }
+  static inline void platform_mutex_lock(platform_mutex_t *m) { pthread_mutex_lock(m); }
+  static inline void platform_mutex_unlock(platform_mutex_t *m) { pthread_mutex_unlock(m); }
+
+  static inline int platform_thread_create(void *(*func)(void *), void *arg) {
+      pthread_t th;
+      int r = pthread_create(&th, NULL, func, arg);
+      if (r != 0) return -1;
+      pthread_detach(th);
+      return 0;
+  }
 
 #endif /* _WIN32 */
 

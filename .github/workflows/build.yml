@@ -1,0 +1,89 @@
+name: Build & Test CI/CD
+
+on:
+  push:
+    branches: [ "main", "feature/**" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  linux-test:
+    name: Linux ASan/UBSan Build & Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake gcc build-essential
+
+      - name: Configure CMake with Sanitizers
+        run: |
+          mkdir build && cd build
+          cmake -DCMAKE_BUILD_TYPE=Debug ..
+
+      - name: Build
+        run: |
+          cd build
+          make -j$(nproc)
+
+      - name: Run CTest with ASan/UBSan
+        run: |
+          cd build
+          ctest --output-on-failure --verbose
+
+  mingw-cross-build:
+    name: MinGW-w64 Cross-Compilation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install MinGW toolchain
+        run: sudo apt-get update && sudo apt-get install -y cmake gcc-mingw-w64-x86-64
+
+      - name: Build Windows Executable
+        run: |
+          mkdir build-win && cd build-win
+          cmake -DCMAKE_TOOLCHAIN_FILE=../cmake/mingw-w64-x86_64.cmake ..
+          make -j$(nproc) capt-service
+
+      - name: Verify PE Binary
+        run: |
+          file build-win/capt-service.exe
+
+  windows-native-build:
+    name: Native Windows MSVC Build & Package
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure CMake (MSVC)
+        run: |
+          cmake -B build -A x64
+
+      - name: Build Release
+        run: |
+          cmake --build build --config Release
+
+      - name: Run Windows Tests
+        run: |
+          cd build
+          ctest -C Release --output-on-failure
+
+      - name: Package Portable Distribution
+        run: |
+          mkdir dist
+          copy build\Release\capt-service.exe dist\
+          copy install\capt-lbp810.inf dist\
+          copy install\install.ps1 dist\
+          copy install\diagnose.ps1 dist\
+          copy README.md dist\
+          Compress-Archive -Path dist\* -DestinationPath capt-service-portable.zip
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: capt-service-windows-x64
+          path: capt-service-portable.zip

@@ -37,12 +37,14 @@ set(SERVICE_SOURCES
 
 add_executable(capt-service ${SERVICE_SOURCES})
 
+find_package(Threads REQUIRED)
+
 if(TARGET_WINDOWS)
     target_link_libraries(capt-service PRIVATE winusb setupapi ws2_32 advapi32)
     target_compile_definitions(capt-service PRIVATE _WIN32_WINNT=0x0A00)
 else()
     # On Linux, link math and pthreads for testing
-    target_link_libraries(capt-service PRIVATE m)
+    target_link_libraries(capt-service PRIVATE Threads::Threads m)
 endif()
 
 target_include_directories(capt-service PRIVATE src)
@@ -77,6 +79,8 @@ target_include_directories(test_ipp PRIVATE src)
 if(TARGET_WINDOWS)
     target_link_libraries(test_ipp PRIVATE ws2_32)
     target_compile_definitions(test_ipp PRIVATE _WIN32_WINNT=0x0A00)
+else()
+    target_link_libraries(test_ipp PRIVATE Threads::Threads)
 endif()
 add_test(NAME test_ipp COMMAND test_ipp)
 
