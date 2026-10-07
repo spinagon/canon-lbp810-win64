@@ -132,7 +132,7 @@ static void get_ipp_status(ipp_printer_state_info_t *info, void *user_data)
                 g_printer_state = 5; // stopped
                 g_printer_state_reasons = "media-empty-error";
                 g_printer_accepting_jobs = false;
-            } else if (st.engine & 0x0100) {
+            } else if ((st.basic & 0x80) && (st.engine & 0x0100)) {
                 g_printer_state = 5; // stopped
                 g_printer_state_reasons = "media-jam-error";
                 g_printer_accepting_jobs = false;

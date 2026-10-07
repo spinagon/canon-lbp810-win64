@@ -185,12 +185,22 @@ void test_engine_status_reasons() {
     assert(!st_cart.cartridge_present);
     assert(strcmp(st_cart.error_string, "No Toner Cartridge") == 0);
 
-    // Paper jam (0x0100)
+    // Paper jam (0x0100 + basic 0x80)
     uint8_t raw_jam[16] = {0};
+    raw_jam[0] = 0x80; // GENERAL_ERROR active
     raw_jam[6] = 0x00; raw_jam[7] = 0x01; // Engine: 0x0100
     capt_status_t st_jam;
     capt_parse_status(raw_jam, 16, &st_jam);
+    assert(st_jam.error);
     assert(strcmp(st_jam.error_string, "Paper Jam") == 0);
+
+    // Normal ready printer with model code / engine flags 0x01A4 and basic 0x00 (no error)
+    uint8_t raw_normal[16] = {0};
+    raw_normal[6] = 0xA4; raw_normal[7] = 0x01; // Engine: 0x01A4
+    capt_status_t st_normal;
+    capt_parse_status(raw_normal, 16, &st_normal);
+    assert(!st_normal.error);
+    assert(strcmp(st_normal.error_string, "No Error") == 0);
 }
 
 int main() {

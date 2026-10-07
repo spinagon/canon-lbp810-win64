@@ -256,7 +256,7 @@ int capt_job_begin(capt_printer_t *printer) {
     /* Reset engine state machine if engine was left in an unready/error state */
     capt_status_t st;
     if (get_extended_status(printer, &st) == 0) {
-        if (!st.ready || st.engine != 0 || st.controller != 0) {
+        if (!st.ready || st.error || (st.basic & 0x80) || st.controller != 0) {
             LOG_INFO("Resetting print engine state (engine=0x%04X, ctrl=0x%02X, basic=0x%02X)...",
                      st.engine, st.controller, st.basic);
             usb_send_packet(&printer->usb, CAPT_RESET_ENGINE, NULL, 0);

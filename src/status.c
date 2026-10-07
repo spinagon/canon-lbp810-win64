@@ -29,8 +29,7 @@ void capt_parse_status(const uint8_t *raw, uint16_t raw_len, capt_status_t *stat
     status->error = ((status->basic & 0x80) != 0) ||
                     !status->cover_closed ||
                     !status->cartridge_present ||
-                    ((status->engine & 0x0100) != 0) || /* Jam */
-                    ((status->engine & 0x0002) != 0);   /* Service Call */
+                    !status->paper_available;
     
     status->error_string = capt_status_error_string(status);
 }
@@ -39,10 +38,12 @@ const char *capt_status_error_string(const capt_status_t *status) {
     if (!status->cover_closed) return "Cover Open";
     if (!status->cartridge_present) return "No Toner Cartridge";
     if (!status->paper_available) return "Out of Paper / No Paper in Tray";
-    if (status->engine & 0x0100) return "Paper Jam";
-    if (status->engine & 0x00C0) return "Misprint Error";
-    if (status->engine & 0x0002) return "Service Call (Hardware Error)";
-    if (status->basic & 0x80) return "General Error";
+    if (status->basic & 0x80) {
+        if (status->engine & 0x0100) return "Paper Jam";
+        if (status->engine & 0x00C0) return "Misprint Error";
+        if (status->engine & 0x0002) return "Service Call (Hardware Error)";
+        return "General Error";
+    }
     if (!status->ready) return "Printer Not Ready";
     return "No Error";
 }

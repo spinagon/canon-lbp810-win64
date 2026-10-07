@@ -136,7 +136,7 @@ Extended status responses (`0xA0A0`) yield a minimum of 16 status bytes:
 | `0` | `basic` | `0x08` | `IM_DATA_BUSY` (1 if onboard FIFO buffer is full) |
 | `0` | `basic` | `0x80` | `GENERAL_ERROR` (active fatal error) |
 | `2` | `aux` | `0x06` | Feed roller / engine motion active |
-| `6–7` | `engine` | `0x0100` | Paper Jam (`media-jam-error`) |
+| `6–7` | `engine` | `0x0100` | Paper Jam (`media-jam-error`, when `basic & 0x80` active) |
 | `6–7` | `engine` | `0x0200` | No Paper in Tray (`media-empty-error`) |
 | `6–7` | `engine` | `0x2000` | No Toner Cartridge (`marker-supply-missing-error`) |
 | `6–7` | `engine` | `0x4000` | Front Door / Cover Open (`door-open-error`) |
