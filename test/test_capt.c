@@ -203,6 +203,19 @@ void test_engine_status_reasons() {
     assert(strcmp(st_normal.error_string, "No Error") == 0);
 }
 
+void test_error_codes() {
+    printf("Testing error codes definition...\n");
+    assert(CAPT_OK == 0);
+    assert(CAPT_ERR_COMM == -1);
+    assert(CAPT_ERR_NO_PAPER == -2);
+    assert(CAPT_ERR_COVER_OPEN == -3);
+    assert(CAPT_ERR_CANCELLED == -4);
+    assert(CAPT_ERR_DELIVERY_TIMEOUT == -5);
+    assert(CAPT_ERR_BUFFER_TIMEOUT == -6);
+    assert(CAPT_ERR_ENGINE == -7);
+    assert(CAPT_ERR_JAM == -8);
+}
+
 int main() {
     test_packet_encoding();
     test_page_header_construction();
@@ -212,6 +225,7 @@ int main() {
     test_extended_paper_sizes();
     test_page_params_building();
     test_engine_status_reasons();
+    test_error_codes();
     
     printf("All test_capt tests passed!\n");
     return 0;

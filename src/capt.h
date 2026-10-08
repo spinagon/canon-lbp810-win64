@@ -36,6 +36,17 @@
 #define PAPER_LEGAL     0x0C
 #define PAPER_LETTER    0x0D
 
+/* Return codes for capt_print_page / wait_buffer_ready */
+#define CAPT_OK                      0
+#define CAPT_ERR_COMM               -1
+#define CAPT_ERR_NO_PAPER           -2
+#define CAPT_ERR_COVER_OPEN         -3
+#define CAPT_ERR_CANCELLED          -4
+#define CAPT_ERR_DELIVERY_TIMEOUT   -5
+#define CAPT_ERR_BUFFER_TIMEOUT     -6
+#define CAPT_ERR_ENGINE             -7
+#define CAPT_ERR_JAM                -8
+
 typedef struct {
     uint8_t     code;
     const char *name;

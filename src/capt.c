@@ -178,31 +178,45 @@ static int wait_printer_ready(capt_printer_t *p, int timeout_ms) {
 /* Wait until printer buffer has space, with timeout */
 static int wait_buffer_ready(capt_printer_t *p, int timeout_ms) {
     int elapsed = 0;
+    int last_log = 0;
     while (elapsed < timeout_ms) {
         if (p->cancel_flag && *(p->cancel_flag)) {
             LOG_WARN("Buffer wait aborted: job cancelled");
-            return -4;
+            return CAPT_ERR_CANCELLED;
         }
         uint8_t sb = 0;
-        if (get_basic_status(p, &sb) != 0) return -1;
+        if (get_basic_status(p, &sb) != 0) return CAPT_ERR_COMM;
         if (sb & 0x80) {
-            LOG_ERROR("Basic status reports ERROR bit: 0x%02X", sb);
-            return -2;  /* Error */
+            capt_status_t st;
+            memset(&st, 0, sizeof(st));
+            get_extended_status(p, &st);
+            LOG_ERROR("Printer engine error during raster streaming: %s (engine=0x%04X, basic=0x%02X)",
+                      st.error_string, st.engine, sb);
+            if (!st.cover_closed) return CAPT_ERR_COVER_OPEN;
+            if (st.engine & 0x0100) return CAPT_ERR_JAM;
+            if (!st.paper_available) return CAPT_ERR_NO_PAPER;
+            return CAPT_ERR_ENGINE;
         }
-        if (!(sb & 0x08)) return 0; /* Buffer not full */
-        SLEEP_MS(10);
-        elapsed += 10;
+        if (!(sb & 0x08)) return CAPT_OK; /* Buffer has space */
+
+        SLEEP_MS(20);
+        elapsed += 20;
+        if (elapsed - last_log >= 3000) {
+            LOG_INFO("Printer engine buffer full, waiting for laser scanning to consume raster... (t=%ds, basic=0x%02X)",
+                     elapsed / 1000, sb);
+            last_log = elapsed;
+        }
     }
     uint8_t final_sb = 0;
     get_basic_status(p, &final_sb);
     LOG_ERROR("wait_buffer_ready timed out after %d ms (basic_status=0x%02X)", timeout_ms, final_sb);
-    return -3; /* Timeout */
+    return CAPT_ERR_BUFFER_TIMEOUT;
 }
 
 /* Send a chunk of compressed data with flow control */
 static int send_data_chunk(capt_printer_t *p, const uint8_t *data, uint32_t len) {
-    int rc = wait_buffer_ready(p, 5000);
-    if (rc != 0) return rc;
+    int rc = wait_buffer_ready(p, 30000); /* 30-second timeout for mechanical engine scanning */
+    if (rc != CAPT_OK) return rc;
     return usb_send_packet(&p->usb, CAPT_PRINT_DATA, data, (uint16_t)len);
 }
 
@@ -313,13 +327,13 @@ int capt_print_page(capt_printer_t *printer, const capt_page_params_t *params,
 
     if (printer->cancel_flag && *(printer->cancel_flag)) {
         LOG_WARN("Print page aborted before start: job cancelled");
-        return -4;
+        return CAPT_ERR_CANCELLED;
     }
 
     /* Check printer readiness before sending data */
     if (wait_printer_ready(printer, 10000) != 0) {
         if (printer->cancel_flag && *(printer->cancel_flag)) {
-            return -4;
+            return CAPT_ERR_CANCELLED;
         }
         capt_status_t st;
         get_extended_status(printer, &st);
@@ -327,12 +341,17 @@ int capt_print_page(capt_printer_t *printer, const capt_page_params_t *params,
             LOG_ERROR("Cannot print page %u: NO PAPER IN PRINTER TRAY (engine=0x%04X, basic=0x%02X, slots=0x%02X)",
                       printer->page_counter + 1, st.engine, st.basic, st.paper_slots);
             LOG_ERROR(">>> PLEASE LOAD PAPER INTO THE PRINTER TRAY AND ENSURE IT IS FULLY INSERTED <<<");
-            return -2;
+            return CAPT_ERR_NO_PAPER;
         }
         if (!st.cover_closed) {
             LOG_ERROR("Cannot print page %u: PRINTER COVER IS OPEN", printer->page_counter + 1);
-            return -3;
+            return CAPT_ERR_COVER_OPEN;
         }
+        if (st.engine & 0x0100) {
+            LOG_ERROR("Cannot print page %u: PAPER JAM IN PRINTER", printer->page_counter + 1);
+            return CAPT_ERR_JAM;
+        }
+        return CAPT_ERR_COMM;
     }
 
     /* Phase 1: Go online */
@@ -394,7 +413,7 @@ int capt_print_page(capt_printer_t *printer, const capt_page_params_t *params,
         if (printer->cancel_flag && *(printer->cancel_flag)) {
             LOG_WARN("Job cancelled during SCoA streaming at line %u", line);
             scoa_free(&scoa);
-            return -4;
+            return CAPT_ERR_CANCELLED;
         }
 
         const uint8_t *cur = bitmap_1bpp + (line * width_bytes);
@@ -448,7 +467,7 @@ int capt_print_page(capt_printer_t *printer, const capt_page_params_t *params,
     for (int i = 0; i < 30; i++) {
         if (printer->cancel_flag && *(printer->cancel_flag)) {
             LOG_WARN("Job cancelled while waiting for pickup cycle");
-            return -4;
+            return CAPT_ERR_CANCELLED;
         }
         SLEEP_MS(100);
         elapsed += 100;
@@ -457,7 +476,7 @@ int capt_print_page(capt_printer_t *printer, const capt_page_params_t *params,
     do {
         if (printer->cancel_flag && *(printer->cancel_flag)) {
             LOG_WARN("Job cancelled while waiting for page delivery");
-            return -4;
+            return CAPT_ERR_CANCELLED;
         }
         if (get_extended_status(printer, &status) == 0) {
             if (elapsed - last_log_elapsed >= 3000) {
@@ -497,6 +516,6 @@ int capt_print_page(capt_printer_t *printer, const capt_page_params_t *params,
     }
 
     printer->page_counter++;
-    return delivered ? 0 : -5;
+    return delivered ? CAPT_OK : CAPT_ERR_DELIVERY_TIMEOUT;
 }
 

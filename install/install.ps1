@@ -201,9 +201,11 @@ if ($ServiceOnly) {
         } | Select-Object -First 1
     }
 
+    $TargetPrinterName = $PrinterName
     if ($existingPrinter) {
-        Write-Host "  Printer already configured: '$($existingPrinter.Name)' (Port: $($existingPrinter.PortName))" -ForegroundColor Green
-        Write-Host "  Preserving existing working printer without modification."
+        $TargetPrinterName = $existingPrinter.Name
+        Write-Host "  Printer already configured: '$TargetPrinterName' (Port: $($existingPrinter.PortName))" -ForegroundColor Green
+        Write-Host "  Preserving existing working printer."
     } else {
         # Remove stale TCP port if leftover from previous installs
         $oldPort = Get-PrinterPort -Name $PortName -ErrorAction SilentlyContinue
@@ -247,8 +249,8 @@ if ($ServiceOnly) {
 
     # Set default paper size to A4 in Windows printer preferences
     try {
-        Set-PrintConfiguration -PrinterName $PrinterName -PaperSize A4 -ErrorAction SilentlyContinue
-        Write-Host "  Set default paper size to A4 for '$PrinterName'" -ForegroundColor Green
+        Set-PrintConfiguration -PrinterName $TargetPrinterName -PaperSize A4 -ErrorAction SilentlyContinue
+        Write-Host "  Set default paper size to A4 for '$TargetPrinterName'" -ForegroundColor Green
     } catch {
         # Optional setting, continue if unsupported on older OS
     }

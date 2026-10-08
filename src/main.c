@@ -37,7 +37,7 @@ static bool               g_printer_accepting_jobs = true;
 static dither_algorithm_t g_dither_algo = DITHER_ADAPTIVE;
 static uint8_t            g_toner_density = 0x1F;
 static bool               g_force_toner_save = false;
-static uint8_t            g_force_paper_code = 0; // 0 = auto-detect, or PAPER_A4, etc.
+static uint8_t            g_force_paper_code = PAPER_A4; // Default to ISO A4 for Canon LBP-810 (or 0 for auto-detect)
 
 /* ── Build CAPT page params from PWG header ── */
 static void build_page_params(capt_page_params_t *params,
@@ -45,7 +45,7 @@ static void build_page_params(capt_page_params_t *params,
 {
     uint32_t dpi = hdr->hw_resolution_x ? hdr->hw_resolution_x : 600;
 
-    /* Paper format selection: priority to forced --paper option if set */
+    /* Paper format selection: priority to forced/default --paper option if set */
     const capt_paper_info_t *paper = NULL;
     if (g_force_paper_code != 0) {
         paper = capt_get_paper_info_by_code(g_force_paper_code);
@@ -88,7 +88,7 @@ static void build_page_params(capt_page_params_t *params,
              paper->name, hdr->width, hdr->height, hdr->page_size_name,
              params->image_line_size, params->image_lines, dpi,
              params->input_slot, params->toner_saving,
-             (g_force_paper_code != 0) ? " [forced]" : "");
+             (g_force_paper_code != 0) ? " [A4 default/forced]" : "");
 }
 
 /* ── Cancel callback: called from IPP thread when Cancel-Job received ── */
@@ -333,27 +333,35 @@ static void on_print_job(const uint8_t *pwg_data, size_t pwg_len, void *user_dat
                                  params.image_lines);
         free(mono_bitmap);
 
-        if (rc == -4) {
+        if (rc == CAPT_ERR_CANCELLED) {
             LOG_WARN("Page %d printing cancelled by user", page_num);
             break;
-        } else if (rc == -2) {
+        } else if (rc == CAPT_ERR_NO_PAPER) {
             LOG_ERROR("Page %d printing halted: Out of paper", page_num);
             g_printer_state = 5;
             g_printer_state_reasons = "media-empty-error";
             break;
-        } else if (rc == -3) {
+        } else if (rc == CAPT_ERR_COVER_OPEN) {
             LOG_ERROR("Page %d printing halted: Cover open", page_num);
             g_printer_state = 5;
             g_printer_state_reasons = "door-open-error";
             break;
-        } else if (rc == -5) {
+        } else if (rc == CAPT_ERR_JAM) {
+            LOG_ERROR("Page %d printing halted: Paper jam", page_num);
+            g_printer_state = 5;
+            g_printer_state_reasons = "media-jam-error";
+            break;
+        } else if (rc == CAPT_ERR_BUFFER_TIMEOUT) {
+            LOG_ERROR("Page %d printing halted: Printer buffer timeout (engine stalled)", page_num);
+            break;
+        } else if (rc == CAPT_ERR_DELIVERY_TIMEOUT) {
             LOG_WARN("Page %d delivery confirmation timed out (data transmitted successfully)", page_num);
             /* Do not abort remaining pages of a multi-page job */
             if (pwg_has_more_pages(&stream)) {
                 LOG_INFO("Proceeding to next page of job...");
                 platform_sleep_ms(1000);
             }
-        } else if (rc != 0) {
+        } else if (rc != CAPT_OK) {
             LOG_ERROR("Failed to print page %d: communication error %d", page_num, rc);
             /* Reset USB only on hardware communication failure */
             capt_close(&g_capt_dev);
@@ -362,6 +370,10 @@ static void on_print_job(const uint8_t *pwg_data, size_t pwg_len, void *user_dat
         }
 
         LOG_INFO("Page %d printed successfully", page_num);
+        if (pwg_has_more_pages(&stream)) {
+            LOG_INFO("Proceeding to next page of job...");
+            platform_sleep_ms(500);
+        }
     }
 
     /* End or cancel print job */
@@ -506,12 +518,17 @@ int main(int argc, char *argv[])
             g_force_toner_save = true;
         } else if ((strcmp(argv[i], "--paper") == 0 || strcmp(argv[i], "-P") == 0) && i + 1 < argc) {
             const char *pname = argv[++i];
-            const capt_paper_info_t *pinfo = capt_get_paper_info_by_name(pname);
-            if (pinfo) {
-                g_force_paper_code = pinfo->code;
-                LOG_INFO("Forced default paper format: %s (code 0x%02X)", pinfo->name, pinfo->code);
+            if (strcmp(pname, "auto") == 0 || strcmp(pname, "0") == 0) {
+                g_force_paper_code = 0;
+                LOG_INFO("Paper format selection: auto-detect from print job");
             } else {
-                LOG_WARN("Unknown paper format '%s', ignoring", pname);
+                const capt_paper_info_t *pinfo = capt_get_paper_info_by_name(pname);
+                if (pinfo) {
+                    g_force_paper_code = pinfo->code;
+                    LOG_INFO("Default paper format set to: %s (code 0x%02X)", pinfo->name, pinfo->code);
+                } else {
+                    LOG_WARN("Unknown paper format '%s', ignoring", pname);
+                }
             }
         } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             printf("Canon LBP-810 CAPT Print Service\n\n");
@@ -519,7 +536,7 @@ int main(int argc, char *argv[])
             printf("Options:\n");
             printf("  --console, -c          Run in console mode (foreground)\n");
             printf("  --port, -p <PORT>      IPP listen port (default: 6631)\n");
-            printf("  --paper, -P <NAME>     Default/forced paper: A4, Letter, Legal, Exec, etc.\n");
+            printf("  --paper, -P <NAME>     Default paper format (default: A4; or auto, Letter, Legal, etc.)\n");
             printf("  --dither, -d <ALGO>    Dithering: adaptive, fs, atkinson, bayer, threshold\n");
             printf("  --density <1-5>        Toner density level (1=lightest, 5=darkest)\n");
             printf("  --toner-save           Force toner saving draft mode\n");
