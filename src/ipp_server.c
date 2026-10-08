@@ -230,7 +230,6 @@ static void handle_ipp_request(const uint8_t *req, size_t req_len, uint8_t **res
         write_attr_str(&p, NULL, "iso_c5_162x229mm", IPP_TAG_KEYWORD);
         write_attr_str(&p, "media-default", "iso_a4_210x297mm", IPP_TAG_KEYWORD);
         write_attr_str(&p, "media-ready", "iso_a4_210x297mm", IPP_TAG_KEYWORD);
-        write_attr_str(&p, "media-col-supported", "media-size", IPP_TAG_KEYWORD);
 
         /* Media Source / Tray Selection (Roadmap 2.2) */
         write_attr_str(&p, "media-source-supported", "auto", IPP_TAG_KEYWORD);

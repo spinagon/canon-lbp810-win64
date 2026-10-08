@@ -317,7 +317,7 @@ int capt_print_page(capt_printer_t *printer, const capt_page_params_t *params,
     }
 
     /* Check printer readiness before sending data */
-    if (wait_printer_ready(printer, 5000) != 0) {
+    if (wait_printer_ready(printer, 10000) != 0) {
         if (printer->cancel_flag && *(printer->cancel_flag)) {
             return -4;
         }
@@ -335,14 +335,6 @@ int capt_print_page(capt_printer_t *printer, const capt_page_params_t *params,
         }
     }
 
-    /* Record starting status before printing to track page counter */
-    capt_status_t init_status;
-    memset(&init_status, 0, sizeof(init_status));
-    get_extended_status(printer, &init_status);
-    uint16_t start_printed = init_status.page_printed;
-    LOG_INFO("Starting page (job page %u): initial printer printed=%u, start=%u",
-             printer->page_counter + 1, start_printed, init_status.page_start);
-
     /* Phase 1: Go online */
     uint16_t page_num = printer->page_counter + 1;
     uint8_t magic[8] = {
@@ -356,6 +348,15 @@ int capt_print_page(capt_printer_t *printer, const capt_page_params_t *params,
     uint16_t actual = 0;
     usb_recv_packet(&printer->usb, CAPT_GO_ONLINE, resp, sizeof(resp), &actual);
     LOG_INFO("CAPT_GO_ONLINE page %u returned 0x%02X", page_num, resp[0]);
+
+    /* Query baseline status AFTER engine is armed and reset for this page */
+    capt_status_t init_status;
+    memset(&init_status, 0, sizeof(init_status));
+    get_extended_status(printer, &init_status);
+    uint16_t start_printed = init_status.page_printed;
+    uint16_t start_shipped = init_status.page_shipped;
+    LOG_INFO("Starting page (job page %u): initial printer printed=%u, shipped=%u, start=%u",
+             page_num, start_printed, start_shipped, init_status.page_start);
     
     /* Phase 2: Send page parameters (34-byte payload) */
     uint8_t pdata[34] = {0};
@@ -460,16 +461,17 @@ int capt_print_page(capt_printer_t *printer, const capt_page_params_t *params,
         }
         if (get_extended_status(printer, &status) == 0) {
             if (elapsed - last_log_elapsed >= 3000) {
-                LOG_INFO("Delivery status (t=%ds): printed=%u (start=%u), start_cnt=%u, printing=%u, shipped=%u, engine=0x%04X, basic=0x%02X, aux=0x%02X",
+                LOG_INFO("Delivery status (t=%ds): printed=%u (start=%u), shipped=%u (start=%u), printing=%u, engine=0x%04X, basic=0x%02X, aux=0x%02X",
                          elapsed / 1000, status.page_printed, start_printed,
-                         status.page_start, status.page_printing, status.page_shipped,
-                         status.engine, status.basic, status.aux);
+                         status.page_shipped, start_shipped,
+                         status.page_printing, status.engine, status.basic, status.aux);
                 last_log_elapsed = elapsed;
             }
 
-            if (status.page_printed > start_printed || status.page_shipped > start_printed) {
-                LOG_INFO("Page %u printed and ejected successfully (counter %u -> %u)",
-                         page_num, start_printed, status.page_printed);
+            if (status.page_printed > start_printed || status.page_shipped > start_shipped) {
+                LOG_INFO("Page %u printed and ejected successfully (counter printed: %u -> %u, shipped: %u -> %u)",
+                         page_num, start_printed, status.page_printed,
+                         start_shipped, status.page_shipped);
                 delivered = true;
                 break;
             }
@@ -478,8 +480,8 @@ int capt_print_page(capt_printer_t *printer, const capt_page_params_t *params,
                           status.error_string, status.engine, status.basic);
                 break;
             }
-            /* Engine completion fallback: if at least 10 seconds have elapsed and the engine is idle, ready, and has no error */
-            if (elapsed >= 10000 && status.ready && !status.error && !status.buffer_full) {
+            /* Engine completion fallback: if at least 10 seconds have elapsed and the engine is idle and ready */
+            if (elapsed >= 10000 && status.ready && !status.error) {
                 LOG_INFO("Printer engine cycle completed (engine=0x%04X, basic=0x%02X)",
                          status.engine, status.basic);
                 delivered = true;

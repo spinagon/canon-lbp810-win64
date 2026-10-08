@@ -37,6 +37,7 @@ static bool               g_printer_accepting_jobs = true;
 static dither_algorithm_t g_dither_algo = DITHER_ADAPTIVE;
 static uint8_t            g_toner_density = 0x1F;
 static bool               g_force_toner_save = false;
+static uint8_t            g_force_paper_code = 0; // 0 = auto-detect, or PAPER_A4, etc.
 
 /* ── Build CAPT page params from PWG header ── */
 static void build_page_params(capt_page_params_t *params,
@@ -44,10 +45,15 @@ static void build_page_params(capt_page_params_t *params,
 {
     uint32_t dpi = hdr->hw_resolution_x ? hdr->hw_resolution_x : 600;
 
-    /* Extended paper format lookup (Roadmap 2.1) */
-    const capt_paper_info_t *paper = capt_get_paper_info_by_name(hdr->page_size_name);
-    if (!paper) {
-        paper = capt_get_paper_info_by_dims(hdr->width, hdr->height, dpi);
+    /* Paper format selection: priority to forced --paper option if set */
+    const capt_paper_info_t *paper = NULL;
+    if (g_force_paper_code != 0) {
+        paper = capt_get_paper_info_by_code(g_force_paper_code);
+    } else {
+        paper = capt_get_paper_info_by_name(hdr->page_size_name);
+        if (!paper) {
+            paper = capt_get_paper_info_by_dims(hdr->width, hdr->height, dpi);
+        }
     }
     if (!paper) {
         paper = capt_get_paper_info_by_code(PAPER_A4);
@@ -78,10 +84,11 @@ static void build_page_params(capt_page_params_t *params,
 
     capt_build_page_params(params, paper->code, dpi, input_slot, toner_saving, smoothing);
     memset(params->toner_density, g_toner_density, 4);
-    LOG_INFO("Built page params: %s (%ux%u px, linesize=%u, lines=%u, %u DPI, slot=0x%02X, toner_save=0x%02X)",
-             paper->name, params->paper_width, params->paper_height,
+    LOG_INFO("Built page params: %s (PWG: %ux%u px, name='%s', linesize=%u, lines=%u, %u DPI, slot=0x%02X, toner_save=0x%02X%s)",
+             paper->name, hdr->width, hdr->height, hdr->page_size_name,
              params->image_line_size, params->image_lines, dpi,
-             params->input_slot, params->toner_saving);
+             params->input_slot, params->toner_saving,
+             (g_force_paper_code != 0) ? " [forced]" : "");
 }
 
 /* ── Cancel callback: called from IPP thread when Cancel-Job received ── */
@@ -341,8 +348,11 @@ static void on_print_job(const uint8_t *pwg_data, size_t pwg_len, void *user_dat
             break;
         } else if (rc == -5) {
             LOG_WARN("Page %d delivery confirmation timed out (data transmitted successfully)", page_num);
-            /* Do not tear down USB device; allow capt_job_end to release the unit cleanly */
-            break;
+            /* Do not abort remaining pages of a multi-page job */
+            if (pwg_has_more_pages(&stream)) {
+                LOG_INFO("Proceeding to next page of job...");
+                platform_sleep_ms(1000);
+            }
         } else if (rc != 0) {
             LOG_ERROR("Failed to print page %d: communication error %d", page_num, rc);
             /* Reset USB only on hardware communication failure */
@@ -494,12 +504,22 @@ int main(int argc, char *argv[])
             g_toner_density = levels[d - 1];
         } else if (strcmp(argv[i], "--toner-save") == 0) {
             g_force_toner_save = true;
+        } else if ((strcmp(argv[i], "--paper") == 0 || strcmp(argv[i], "-P") == 0) && i + 1 < argc) {
+            const char *pname = argv[++i];
+            const capt_paper_info_t *pinfo = capt_get_paper_info_by_name(pname);
+            if (pinfo) {
+                g_force_paper_code = pinfo->code;
+                LOG_INFO("Forced default paper format: %s (code 0x%02X)", pinfo->name, pinfo->code);
+            } else {
+                LOG_WARN("Unknown paper format '%s', ignoring", pname);
+            }
         } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             printf("Canon LBP-810 CAPT Print Service\n\n");
             printf("Usage: %s [OPTIONS]\n\n", argv[0]);
             printf("Options:\n");
             printf("  --console, -c          Run in console mode (foreground)\n");
             printf("  --port, -p <PORT>      IPP listen port (default: 6631)\n");
+            printf("  --paper, -P <NAME>     Default/forced paper: A4, Letter, Legal, Exec, etc.\n");
             printf("  --dither, -d <ALGO>    Dithering: adaptive, fs, atkinson, bayer, threshold\n");
             printf("  --density <1-5>        Toner density level (1=lightest, 5=darkest)\n");
             printf("  --toner-save           Force toner saving draft mode\n");

@@ -244,6 +244,14 @@ if ($ServiceOnly) {
             }
         }
     }
+
+    # Set default paper size to A4 in Windows printer preferences
+    try {
+        Set-PrintConfiguration -PrinterName $PrinterName -PaperSize A4 -ErrorAction SilentlyContinue
+        Write-Host "  Set default paper size to A4 for '$PrinterName'" -ForegroundColor Green
+    } catch {
+        # Optional setting, continue if unsupported on older OS
+    }
 }
 
 # Done
