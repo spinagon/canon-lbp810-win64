@@ -61,3 +61,5 @@ Thumbs.db
 # Temporary files and crash dumps
 *.tmp
 *.dmp
+*.jpg
+*.png
