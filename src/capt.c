@@ -337,7 +337,7 @@ int capt_print_page(capt_printer_t *printer, const capt_page_params_t *params,
         }
         capt_status_t st;
         get_extended_status(printer, &st);
-        if (!st.paper_available) {
+        if ((st.basic & 0x80) && !st.paper_available) {
             LOG_ERROR("Cannot print page %u: NO PAPER IN PRINTER TRAY (engine=0x%04X, basic=0x%02X, slots=0x%02X)",
                       printer->page_counter + 1, st.engine, st.basic, st.paper_slots);
             LOG_ERROR(">>> PLEASE LOAD PAPER INTO THE PRINTER TRAY AND ENSURE IT IS FULLY INSERTED <<<");
@@ -347,7 +347,7 @@ int capt_print_page(capt_printer_t *printer, const capt_page_params_t *params,
             LOG_ERROR("Cannot print page %u: PRINTER COVER IS OPEN", printer->page_counter + 1);
             return CAPT_ERR_COVER_OPEN;
         }
-        if (st.engine & 0x0100) {
+        if ((st.basic & 0x80) && (st.engine & 0x0100)) {
             LOG_ERROR("Cannot print page %u: PAPER JAM IN PRINTER", printer->page_counter + 1);
             return CAPT_ERR_JAM;
         }

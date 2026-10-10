@@ -21,7 +21,9 @@ void capt_parse_status(const uint8_t *raw, uint16_t raw_len, capt_status_t *stat
     status->page_printed = raw[14] | (raw[15] << 8);
     
     // EngineReadyStatus bitmasks: 0x0200 = NO_PRINT_PAPER, 0x2000 = NO_CARTRIDGE, 0x4000 = DOOR_OPEN
-    status->paper_available = (status->engine & 0x0200) == 0;
+    // Note: raw[7] contains paper format code (0x02 for A4 -> engine 0x0200).
+    // Jam (0x0100) and No Paper (0x0200) in raw[7] are only active when basic error bit 0x80 is set.
+    status->paper_available = !((status->basic & 0x80) && (status->engine & 0x0200));
     status->cartridge_present = (status->engine & 0x2000) == 0;
     status->cover_closed = (status->engine & 0x4000) == 0;
 
@@ -37,13 +39,14 @@ void capt_parse_status(const uint8_t *raw, uint16_t raw_len, capt_status_t *stat
 const char *capt_status_error_string(const capt_status_t *status) {
     if (!status->cover_closed) return "Cover Open";
     if (!status->cartridge_present) return "No Toner Cartridge";
-    if (!status->paper_available) return "Out of Paper / No Paper in Tray";
     if (status->basic & 0x80) {
         if (status->engine & 0x0100) return "Paper Jam";
+        if (status->engine & 0x0200) return "Out of Paper / No Paper in Tray";
         if (status->engine & 0x00C0) return "Misprint Error";
         if (status->engine & 0x0002) return "Service Call (Hardware Error)";
         return "General Error";
     }
+    if (!status->paper_available) return "Out of Paper / No Paper in Tray";
     if (!status->ready) return "Printer Not Ready";
     return "No Error";
 }

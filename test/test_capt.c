@@ -56,7 +56,7 @@ void test_page_header_construction() {
 void test_status_parsing() {
     printf("Testing status parsing...\n");
     uint8_t raw[16] = {0};
-    raw[0] = 0x08; // IM_DATA_BUSY
+    raw[0] = 0x88; // IM_DATA_BUSY (0x08) | GENERAL_ERROR (0x80)
     raw[6] = 0x00; raw[7] = 0x02; // Engine: 0x0200 = NO_PRINT_PAPER
     
     capt_status_t status;
@@ -169,8 +169,9 @@ void test_engine_status_reasons() {
     assert(!st_door.cover_closed);
     assert(strcmp(st_door.error_string, "Cover Open") == 0);
 
-    // Out of paper (0x0200)
+    // Out of paper (0x0200 + basic 0x80)
     uint8_t raw_paper[16] = {0};
+    raw_paper[0] = 0x80; // GENERAL_ERROR active
     raw_paper[6] = 0x00; raw_paper[7] = 0x02; // Engine: 0x0200
     capt_status_t st_paper;
     capt_parse_status(raw_paper, 16, &st_paper);
@@ -201,6 +202,15 @@ void test_engine_status_reasons() {
     capt_parse_status(raw_normal, 16, &st_normal);
     assert(!st_normal.error);
     assert(strcmp(st_normal.error_string, "No Error") == 0);
+
+    // Normal ready printer configured for A4 paper (raw[7] = 0x02 -> engine 0x0200) and basic 0x00 (no error)
+    uint8_t raw_a4[16] = {0};
+    raw_a4[6] = 0x00; raw_a4[7] = 0x02; // Engine: 0x0200 (A4 paper code)
+    capt_status_t st_a4;
+    capt_parse_status(raw_a4, 16, &st_a4);
+    assert(!st_a4.error);
+    assert(st_a4.paper_available);
+    assert(strcmp(st_a4.error_string, "No Error") == 0);
 }
 
 void test_error_codes() {
