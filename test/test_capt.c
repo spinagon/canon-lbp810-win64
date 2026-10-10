@@ -226,6 +226,19 @@ void test_error_codes() {
     assert(CAPT_ERR_JAM == -8);
 }
 
+void test_block_size() {
+    printf("Testing transfer block size definition...\n");
+    // Verify that LBP-810 model ID (0x01A4 = 420) is distinct from USB block size
+    assert(CAPT_MODEL_LBP810 == 0x01A4);
+    assert(CAPT_MODEL_LBP810 == 420); // Model ID must not be used as transfer chunk size!
+
+    capt_printer_t prn;
+    memset(&prn, 0, sizeof(prn));
+    prn.block_size = 4096;
+    assert(prn.block_size == 4096);
+    assert(prn.block_size != 420);
+}
+
 int main() {
     test_packet_encoding();
     test_page_header_construction();
@@ -236,6 +249,7 @@ int main() {
     test_page_params_building();
     test_engine_status_reasons();
     test_error_codes();
+    test_block_size();
     
     printf("All test_capt tests passed!\n");
     return 0;

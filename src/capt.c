@@ -199,8 +199,8 @@ static int wait_buffer_ready(capt_printer_t *p, int timeout_ms) {
         }
         if (!(sb & 0x08)) return CAPT_OK; /* Buffer has space */
 
-        SLEEP_MS(20);
-        elapsed += 20;
+        SLEEP_MS(5);
+        elapsed += 5;
         if (elapsed - last_log >= 3000) {
             LOG_INFO("Printer engine buffer full, waiting for laser scanning to consume raster... (t=%ds, basic=0x%02X)",
                      elapsed / 1000, sb);
@@ -235,11 +235,15 @@ int capt_open(capt_printer_t *printer) {
     if (usb_recv_packet(&printer->usb, CAPT_GET_PRINTER_INFO, info, sizeof(info), &actual) != 0) return -1;
     
     if (actual >= 4) {
-        printer->block_size = info[2] | (info[3] << 8);
-    } else {
-        printer->block_size = 4096;
+        uint16_t model_id = info[2] | (info[3] << 8);
+        LOG_INFO("Printer hardware reported model: 0x%04X", model_id);
     }
-    LOG_INFO("Block size: %u bytes", printer->block_size);
+    /* Block transfer size: 4096 bytes (4 KB).
+     * Note: info[2..3] from CAPT_GET_PRINTER_INFO contains target model code
+     * (0x01A4 = 420 for LBP-810), not the USB block transfer size. Using 420
+     * resulted in severe transfer throttling and engine FIFO underrun mid-page. */
+    printer->block_size = 4096;
+    LOG_INFO("Transfer block size: %u bytes", printer->block_size);
     return 0;
 }
 
@@ -503,10 +507,11 @@ int capt_print_page(capt_printer_t *printer, const capt_page_params_t *params,
                           status.error_string, status.engine, status.basic);
                 break;
             }
-            /* Engine completion fallback: if at least 10 seconds have elapsed and the engine is idle, ready, and feed rollers stopped */
-            if (elapsed >= 10000 && status.ready && ((status.basic & 0x80) == 0) && (status.aux & 0x06) == 0) {
-                LOG_INFO("Printer engine cycle completed (engine=0x%04X, basic=0x%02X, aux=0x%02X)",
-                         status.engine, status.basic, status.aux);
+            /* Engine completion fallback: if at least 10 seconds have elapsed and the engine is idle, rollers stopped, and no error active */
+            if (elapsed >= 10000 && ((status.basic & 0x80) == 0) && (status.aux & 0x06) == 0 &&
+                (status.ready || status.page_shipped > start_shipped)) {
+                LOG_INFO("Printer engine cycle completed (engine=0x%04X, basic=0x%02X, aux=0x%02X, shipped=%u)",
+                         status.engine, status.basic, status.aux, status.page_shipped);
                 delivered = true;
                 break;
             }

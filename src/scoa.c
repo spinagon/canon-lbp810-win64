@@ -4,7 +4,7 @@
 
 void scoa_init(scoa_ctx_t *ctx, int line_bytes) {
     ctx->line_bytes = line_bytes;
-    ctx->out_capacity = line_bytes * 2 + 1024;
+    ctx->out_capacity = line_bytes * 2 + 8192;
     ctx->out_buf = malloc(ctx->out_capacity);
     ctx->out_pos = 0;
 }
