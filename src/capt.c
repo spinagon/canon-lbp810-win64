@@ -487,22 +487,26 @@ int capt_print_page(capt_printer_t *printer, const capt_page_params_t *params,
                 last_log_elapsed = elapsed;
             }
 
-            if (status.page_printed > start_printed || status.page_shipped > start_shipped) {
+            if (status.page_printed > start_printed) {
                 LOG_INFO("Page %u printed and ejected successfully (counter printed: %u -> %u, shipped: %u -> %u)",
                          page_num, start_printed, status.page_printed,
                          start_shipped, status.page_shipped);
                 delivered = true;
                 break;
             }
-            if (status.error) {
+            if (!status.cover_closed) {
+                LOG_ERROR("Printer cover opened during page printing");
+                break;
+            }
+            if ((status.basic & 0x80) != 0) {
                 LOG_ERROR("Printer error during page printing: %s (engine=0x%04X, basic=0x%02X)",
                           status.error_string, status.engine, status.basic);
                 break;
             }
-            /* Engine completion fallback: if at least 10 seconds have elapsed and the engine is idle and ready */
-            if (elapsed >= 10000 && status.ready && !status.error) {
-                LOG_INFO("Printer engine cycle completed (engine=0x%04X, basic=0x%02X)",
-                         status.engine, status.basic);
+            /* Engine completion fallback: if at least 10 seconds have elapsed and the engine is idle, ready, and feed rollers stopped */
+            if (elapsed >= 10000 && status.ready && ((status.basic & 0x80) == 0) && (status.aux & 0x06) == 0) {
+                LOG_INFO("Printer engine cycle completed (engine=0x%04X, basic=0x%02X, aux=0x%02X)",
+                         status.engine, status.basic, status.aux);
                 delivered = true;
                 break;
             }
